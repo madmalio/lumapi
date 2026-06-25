@@ -1,0 +1,190 @@
+export component AppWindow inherits Window {
+    width: 1280px;
+    height: 720px;
+    background: #000000;
+
+    // Data streams from Rust
+    in property <image> camera_feed;
+    in-out property <bool> is_recording: false;
+    in-out property <string> timecode: "00:00:00:00";
+    
+    // Exposure values to match your Blackmagic design exactly
+    in-out property <string> current_lens: "24mm";
+    in-out property <string> current_fps: "30";
+    in-out property <string> current_shutter: "1/39";
+    in-out property <string> current_iris: "f1.9";
+    in-out property <string> current_iso: "744";
+    in-out property <string> current_wb: "5577K";
+    in-out property <string> current_tint: "-3";
+
+    callback toggle_record();
+
+    // =========================================================================
+    // LAYER 1: TRUE FULL-SCREEN CAMERA VIEWPORT
+    // =========================================================================
+    Rectangle {
+        x: 0; y: 0;
+        width: 1140px; // Leaves exactly 140px for the right-hand control strip
+        height: 720px;
+        background: #111111;
+        clip: true;
+
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.camera_feed;
+            image-fit: fill; // Forces video to fill the 1140x720 frame
+        }
+
+        // Rule of Thirds Grid Lines
+        Rectangle { x: parent.width * 0.333; y: 0; width: 1px; height: 100%; background: rgba(255, 255, 255, 0.2); }
+        Rectangle { x: parent.width * 0.666; y: 0; width: 1px; height: 100%; background: rgba(255, 255, 255, 0.2); }
+        Rectangle { x: 0; y: parent.height * 0.333; width: 100%; height: 1px; background: rgba(255, 255, 255, 0.2); }
+        Rectangle { x: 0; y: parent.height * 0.666; width: 100%; height: 1px; background: rgba(255, 255, 255, 0.2); }
+    }
+
+    // =========================================================================
+    // LAYER 2: CINEMATIC TOP METRICS OVERLAY
+    // =========================================================================
+    Rectangle {
+        x: 0; y: 0;
+        width: 1140px;
+        height: 75px;
+        background: @linear-gradient(180deg, rgba(0, 0, 0, 0.6) 0, rgba(0, 0, 0, 0) 1);
+
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 12px;
+            alignment: space-between;
+
+            // Left Metrics Cluster: Lens, FPS, Shutter, Iris
+            HorizontalLayout {
+                spacing: 24px;
+                VerticalLayout { Text { text: "LENS"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_lens; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { Text { text: "FPS"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_fps; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { Text { text: "SHUTTER"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_shutter; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { Text { text: "IRIS"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_iris; font-size: 18px; color: #ffffff; } }
+            }
+
+            // Central Main Timecode
+            Text {
+                text: root.timecode;
+                font-size: 32px;
+                font-weight: 500;
+                color: #ffffff;
+                font-family: "monospace";
+                vertical-alignment: center;
+            }
+
+            // Right Metrics Cluster: ISO, WB, Tint, Resolution
+            HorizontalLayout {
+                spacing: 24px;
+                VerticalLayout { Text { text: "ISO"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_iso; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { Text { text: "WB"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_wb; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { Text { text: "TINT"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_tint; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { 
+                    alignment: center;
+                    Rectangle {
+                        background: #333333; border-radius: 3px; padding: 3px; width: 38px; height: 22px;
+                        Text { text: "4K"; font-size: 11px; font-weight: 900; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text { text: "16:9"; font-size: 9px; color: #aaaaaa; horizontal-alignment: center; }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // LAYER 3: BOTTOM SCOPES & UTILITIES OVERLAY
+    // =========================================================================
+    // Left: Histogram Placeholder
+    Rectangle {
+        x: 15px; y: 590px; width: 180px; height: 110px;
+        background: rgba(0, 0, 0, 0.5); border-radius: 4px; border-width: 1px; border-color: #333333;
+        Text { text: "Rec.709 Histogram"; font-size: 11px; color: #888888; x: 8px; y: 6px; }
+        Rectangle { x: 10px; y: 25px; width: 160px; height: 75px; background: rgba(50, 150, 50, 0.2); border-width: 1px; border-color: #444444; }
+    }
+
+    // Center: Storage / Record Time Remainder
+    Rectangle {
+        x: 420px; y: 610px; width: 220px; height: 90px;
+        background: rgba(0, 0, 0, 0.6); border-radius: 6px; border-width: 1px; border-color: #333333;
+        HorizontalLayout {
+            padding: 15px; spacing: 15px;
+            Rectangle { width: 30px; height: 50px; border-width: 2px; border-color: #ffffff; border-radius: 4px; }
+            VerticalLayout {
+                alignment: center;
+                Text { text: "1:01:19"; font-size: 20px; color: #ffffff; font-weight: 700; }
+                Text { text: "21%   25GB"; font-size: 12px; color: #aaaaaa; }
+            }
+        }
+    }
+
+    // Right: Audio VU Meters
+    Rectangle {
+        x: 820px; y: 610px; width: 220px; height: 90px;
+        background: rgba(0, 0, 0, 0.6); border-radius: 6px; border-width: 1px; border-color: #333333;
+        Text { text: "Default Audio"; font-size: 10px; color: #aaaaaa; x: 12px; y: 8px; }
+        VerticalLayout {
+            x: 12px; y: 30px; spacing: 6px; width: 196px;
+            Rectangle { height: 8px; background: #222222; Rectangle { x: 0; width: 70%; height: 100%; background: #4cd964; } }
+            Rectangle { height: 8px; background: #222222; Rectangle { x: 0; width: 65%; height: 100%; background: #4cd964; } }
+            Text { text: "-45  -30  -20  -10  -6  -3  0  3"; font-size: 9px; color: #666666; }
+        }
+    }
+
+    // =========================================================================
+    // LAYER 4: RIGHT-HAND BLACKMAGIC CONTROL STRIP (140px Width)
+    // =========================================================================
+    Rectangle {
+        x: 1140px; y: 0;
+        width: 140px; height: 720px;
+        background: #090a0c;
+        border-width: 1px; border-color: #1a1c1f;
+
+        VerticalLayout {
+            padding-top: 30px;
+            padding-bottom: 30px;
+            alignment: space-between; // Fixed properties here
+
+            // Top Buttons: Camera Select / Focus Assist
+            VerticalLayout {
+                spacing: 25px;
+                HorizontalLayout { alignment: center; Rectangle { width: 40px; height: 40px; border-width: 1px; border-color: #444444; border-radius: 5px; Text { text: "📷"; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; } } }
+                HorizontalLayout { alignment: center; Rectangle { width: 40px; height: 40px; border-width: 1px; border-color: #444444; border-radius: 5px; Text { text: "🔍"; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; } } }
+            }
+
+            // Center: The Big Red Record Button Clone
+            TouchArea {
+                clicked => { root.toggle_record(); }
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 76px; height: 76px;
+                        border-radius: 38px;
+                        border-width: 4px;
+                        border-color: #ffffff;
+                        background: transparent;
+                        
+                        Rectangle {
+                            x: parent.width / 2 - (root.is_recording ? 20px : 26px);
+                            y: parent.height / 2 - (root.is_recording ? 20px : 26px);
+                            width: root.is_recording ? 40px : 52px;
+                            height: root.is_recording ? 40px : 52px;
+                            border-radius: root.is_recording ? 6px : 26px;
+                            background: #ff3b30;
+                        }
+                    }
+                }
+            }
+
+            // Bottom Buttons: LUT Selection & Settings Configuration
+            VerticalLayout {
+                spacing: 25px;
+                HorizontalLayout { alignment: center; Rectangle { width: 45px; height: 30px; background: #222222; border-radius: 4px; Text { text: "LUT"; font-size: 12px; font-weight: 800; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; } } }
+                HorizontalLayout { alignment: center; Rectangle { width: 40px; height: 40px; Text { text: "⚙"; font-size: 26px; color: #aaaaaa; horizontal-alignment: center; vertical-alignment: center; } } }
+            }
+        }
+    }
+}

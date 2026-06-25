@@ -1,0 +1,1625 @@
+import "./assets/font/Rajdhani-Medium.ttf";
+import "./assets/font/BarlowCondensed-Medium.ttf";
+import { ScrollView } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    full-screen: true;
+    preferred-width: 1280px;
+    preferred-height: 720px;
+    background: #000000;
+
+    in property <bool> force_compact_mode: false;
+    in property <bool> compact_mode: self.force_compact_mode || self.width <= 700px || self.height <= 500px;
+    in property <length> control_strip_width: self.compact_mode ? 0px : 140px;
+    in property <length> overlay_margin: self.compact_mode ? 8px : 15px;
+    in property <length> viewfinder_width: self.width - self.control_strip_width;
+
+    in property <image> camera_feed;
+    in-out property <bool> is_recording: false;
+    in-out property <bool> record_busy: false;
+    in-out property <float> record_busy_pulse: 0.0;
+    in-out property <bool> media_open: false;
+    in-out property <bool> media_loading: false;
+    in-out property <float> media_loading_pulse: 0.0;
+    in-out property <bool> delete_confirm_open: false;
+    in-out property <bool> grid_visible: true;
+    in-out property <bool> focus_peaking_visible: false;
+    in-out property <bool> zoom_magnifier_visible: false;
+    in-out property <int> exposure_signal: 0;
+    in-out property <bool> exposure_overlay_visible: false;
+    in-out property <[string]> media_clip_rows: [];
+    in-out property <[string]> media_clip_durations: [];
+    in-out property <[image]> media_clip_thumbs: [];
+    in-out property <int> media_selected_index: -1;
+    in-out property <string> media_selected_name: "No clip selected";
+    in-out property <string> media_selected_detail: "Open Media to browse recordings";
+    in-out property <bool> settings_open: false;
+    in-out property <bool> full_auto: false;
+    in-out property <int> selected_setting: 0;
+    in-out property <string> timecode: "00:00:00:00";
+    in-out property <string> selected_setting_label: "FPS";
+    in-out property <string> selected_setting_prev_value: "25";
+    in-out property <string> selected_setting_value: "30";
+    in-out property <string> selected_setting_next_value: "50";
+
+    in-out property <string> current_fps: "30";
+    in-out property <string> current_shutter: "180°";
+    in-out property <string> current_iso: "100";
+    in-out property <string> current_wb: "Auto";
+    in-out property <string> current_record_format: "MP4";
+    in-out property <string> current_resolution: "720p";
+    in-out property <string> current_aspect_ratio: "16:9";
+    in-out property <string> current_tint: "0";
+    in-out property <string> current_mode_label: "M";
+    in-out property <string> current_media_status: "READY";
+    in-out property <string> current_media_detail: "MP4 ready";
+    in-out property <float> audio_level_left: 0.0;
+    in-out property <float> audio_level_right: 0.0;
+    in-out property <float> audio_peak_left: 0.0;
+    in-out property <float> audio_peak_right: 0.0;
+    in-out property <bool> audio_clip_left: false;
+    in-out property <bool> audio_clip_right: false;
+
+    callback toggle_record();
+    callback toggle_settings();
+    callback toggle_full_auto();
+    callback select_setting(int);
+    callback adjust_setting(int);
+    callback toggle_media();
+    callback media_select(int);
+    callback media_play(int);
+    callback media_refresh();
+    callback media_delete_selected();
+    callback toggle_focus_peaking();
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: root.viewfinder_width;
+        height: root.height;
+        background: #111111;
+        clip: true;
+
+        Image {
+            x: root.zoom_magnifier_visible ? -parent.width / 2 : 0px;
+            y: root.zoom_magnifier_visible ? -parent.height / 2 : 0px;
+            width: root.zoom_magnifier_visible ? 200% : 100%;
+            height: root.zoom_magnifier_visible ? 200% : 100%;
+            source: root.camera_feed;
+            image-fit: fill;
+        }
+
+        // Viewfinder Grid Lines (toggleable)
+        if (root.grid_visible) : Rectangle {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            Rectangle { x: parent.width * 0.333; y: 0; width: 1px; height: 100%; background: rgba(255, 255, 255, 0.15); }
+            Rectangle { x: parent.width * 0.666; y: 0; width: 1px; height: 100%; background: rgba(255, 255, 255, 0.15); }
+            Rectangle { x: 0; y: parent.height * 0.333; width: 100%; height: 1px; background: rgba(255, 255, 255, 0.15); }
+            Rectangle { x: 0; y: parent.height * 0.666; width: 100%; height: 1px; background: rgba(255, 255, 255, 0.15); }
+
+            // Center Crosshair
+            Rectangle { x: parent.width / 2 - 8px; y: parent.height / 2 - 1px; width: 16px; height: 1px; background: rgba(255, 255, 255, 0.4); }
+            Rectangle { x: parent.width / 2 - 1px; y: parent.height / 2 - 8px; width: 1px; height: 16px; background: rgba(255, 255, 255, 0.4); }
+        }
+
+    }
+
+    Rectangle {
+        visible: root.compact_mode && !root.media_open;
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: 56px;
+        background: rgba(0, 0, 0, 0.6);
+
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            alignment: space-between;
+
+            if (!root.full_auto) : VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 32px;
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        VerticalLayout {
+                            spacing: 1px;
+                            Text { text: "FPS"; font-size: 14px; font-weight: 700; color: #b5bcc8; font-family: "Rajdhani"; }
+                            Text { text: root.current_fps; font-size: 24px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        VerticalLayout {
+                            spacing: 1px;
+                            Text { text: "ISO"; font-size: 14px; font-weight: 700; color: #b5bcc8; font-family: "Rajdhani"; }
+                            Text { text: root.current_iso; font-size: 24px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        VerticalLayout {
+                            spacing: 1px;
+                            Text { text: "SHUTT"; font-size: 14px; font-weight: 700; color: #b5bcc8; font-family: "Rajdhani"; }
+                            Text { text: root.current_shutter; font-size: 24px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        VerticalLayout {
+                            spacing: 1px;
+                            Text { text: "WB"; font-size: 14px; font-weight: 700; color: #b5bcc8; font-family: "Rajdhani"; }
+                            Text { text: root.current_wb; font-size: 24px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; }
+                        }
+                    }
+                }
+            }
+
+            if (root.full_auto) : VerticalLayout {
+                alignment: center;
+                VerticalLayout {
+                    spacing: 1px;
+                    Text { text: "MODE"; font-size: 14px; font-weight: 700; color: #b5bcc8; font-family: "Rajdhani"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: #10b981;
+                            }
+                        }
+                        Text { text: "AUTO"; font-size: 24px; font-weight: 800; color: #10b981; font-family: "Rajdhani"; }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                TouchArea {
+                    width: 48px;
+                    height: 48px;
+                    enabled: !root.is_recording && !root.record_busy;
+                    clicked => { root.toggle_media(); }
+                    Image {
+                        width: 32px;
+                        height: 32px;
+                        x: parent.width / 2 - self.width / 2;
+                        y: parent.height / 2 - self.height / 2;
+                        source: @image-url("assets/img/monitor.png");
+                        image-fit: contain;
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: !root.compact_mode;
+        x: 0;
+        y: 0;
+        width: root.viewfinder_width;
+        height: 75px;
+        background: @linear-gradient(180deg, rgba(0, 0, 0, 0.6) 0, rgba(0, 0, 0, 0) 1);
+
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 12px;
+            alignment: space-between;
+
+            HorizontalLayout {
+                spacing: 24px;
+                VerticalLayout { Text { text: "FPS"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_fps; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { Text { text: "SHUTTER"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_shutter; font-size: 18px; color: #ffffff; } }
+            }
+
+            Text {
+                text: root.timecode;
+                font-size: 32px;
+                font-weight: 500;
+                color: #ffffff;
+                font-family: "monospace";
+                vertical-alignment: center;
+            }
+
+            HorizontalLayout {
+                spacing: 24px;
+                VerticalLayout { Text { text: "ISO"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_iso; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { Text { text: "WB"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_wb; font-size: 18px; color: #ffffff; } }
+                VerticalLayout { Text { text: "TINT"; font-size: 11px; color: #aaaaaa; font-weight: 700; } Text { text: root.current_tint; font-size: 18px; color: #ffffff; } }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        background: #333333;
+                        border-radius: 3px;
+                        width: 56px;
+                        height: 22px;
+                        Text { text: root.current_resolution; font-size: 11px; font-weight: 900; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text { text: root.current_aspect_ratio; font-size: 9px; color: #aaaaaa; horizontal-alignment: center; }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.compact_mode && root.exposure_overlay_visible && !root.media_open;
+        x: root.settings_open ? 142px : 10px;
+        y: root.height - self.height - 84px;
+        width: 66px;
+        height: 144px;
+        background: rgba(0, 0, 0, 0.34);
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: rgba(255, 255, 255, 0.12);
+        animate x { duration: 160ms; }
+
+        VerticalLayout {
+            padding-top: 8px;
+            padding-bottom: 8px;
+            alignment: space-between;
+
+            Rectangle {
+                width: 30px;
+                height: 30px;
+                x: parent.width / 2 - self.width / 2;
+                border-radius: 15px;
+                background: root.exposure_signal == 2 ? #ff3b30 : root.exposure_signal == 1 ? #ffcc00 : rgba(255, 255, 255, 0.18);
+            }
+
+            Rectangle {
+                width: 30px;
+                height: 30px;
+                x: parent.width / 2 - self.width / 2;
+                border-radius: 15px;
+                background: root.exposure_signal == 0 ? #34c759 : rgba(255, 255, 255, 0.18);
+            }
+
+            Rectangle {
+                width: 30px;
+                height: 30px;
+                x: parent.width / 2 - self.width / 2;
+                border-radius: 15px;
+                background: root.exposure_signal == -2 ? #ff3b30 : root.exposure_signal == -1 ? #ffcc00 : rgba(255, 255, 255, 0.18);
+            }
+
+            Text {
+                text: root.exposure_signal > 0 ? "HIGH" : root.exposure_signal < 0 ? "LOW" : "OK";
+                font-size: 12px;
+                font-weight: 800;
+                color: #f5f8ff;
+                font-family: "Rajdhani";
+                horizontal-alignment: center;
+                width: parent.width;
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.compact_mode && !root.media_open;
+        x: root.exposure_overlay_visible
+            ? (root.settings_open ? 216px : 84px)
+            : (root.settings_open ? 142px : 10px);
+        y: root.height - self.height - 84px;
+        width: 56px;
+        height: 144px;
+        background: rgba(0, 0, 0, 0.34);
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: rgba(255, 255, 255, 0.12);
+        animate x { duration: 160ms; }
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 8px;
+            padding-bottom: 18px;
+            spacing: 8px;
+            alignment: center;
+
+            Rectangle {
+                width: 12px;
+                height: 118px;
+                border-radius: 6px;
+                background: rgba(255, 255, 255, 0.12);
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - self.height;
+                    width: parent.width;
+                    height: parent.height * root.audio_level_left;
+                    background: root.audio_clip_left ? #ff3b30 : root.audio_level_left >= 0.82 ? #ffcc00 : #4cd964;
+                    border-radius: 6px;
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height * (1.0 - root.audio_peak_left) - 1px;
+                    width: parent.width;
+                    height: 2px;
+                    background: #ffffff;
+                    visible: root.audio_peak_left > 0;
+                }
+            }
+
+            Rectangle {
+                width: 12px;
+                height: 118px;
+                border-radius: 6px;
+                background: rgba(255, 255, 255, 0.12);
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - self.height;
+                    width: parent.width;
+                    height: parent.height * root.audio_level_right;
+                    background: root.audio_clip_right ? #ff3b30 : root.audio_level_right >= 0.82 ? #ffcc00 : #4cd964;
+                    border-radius: 6px;
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height * (1.0 - root.audio_peak_right) - 1px;
+                    width: parent.width;
+                    height: 2px;
+                    background: #ffffff;
+                    visible: root.audio_peak_right > 0;
+                }
+            }
+
+        }
+    }
+
+    Rectangle {
+        visible: !root.compact_mode;
+        x: root.overlay_margin;
+        y: root.height - self.height - 20px;
+        width: 180px;
+        height: 110px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: #333333;
+        Text { text: "Rec.709 Histogram"; font-size: 11px; color: #888888; x: 8px; y: 6px; }
+        Rectangle { x: 10px; y: 25px; width: 160px; height: 75px; background: rgba(50, 150, 50, 0.2); border-width: 1px; border-color: #444444; }
+    }
+
+    Rectangle {
+        visible: !root.compact_mode;
+        x: root.viewfinder_width / 2 - self.width / 2;
+        y: root.height - self.height - 20px;
+        width: 220px;
+        height: 90px;
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #333333;
+        HorizontalLayout {
+            padding: 15px;
+            spacing: 15px;
+            Rectangle {
+                width: 30px;
+                height: 50px;
+                border-width: 2px;
+                border-color: root.is_recording ? #ff3b30 : #ffffff;
+                border-radius: 4px;
+                background: root.is_recording ? rgba(255, 59, 48, 0.18) : transparent;
+            }
+            VerticalLayout {
+                spacing: 3px;
+                Text { text: root.current_media_status; font-size: 11px; color: root.is_recording ? #ff3b30 : #aaaaaa; font-weight: 800; }
+                Text { text: root.timecode; font-size: 20px; color: #ffffff; font-weight: 700; font-family: "monospace"; }
+                Text { text: root.current_media_detail; font-size: 12px; color: #aaaaaa; overflow: elide; }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: !root.compact_mode;
+        x: root.viewfinder_width - self.width - root.overlay_margin;
+        y: root.height - self.height - 20px;
+        width: 220px;
+        height: 90px;
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #333333;
+        Text { text: "Default Audio"; font-size: 10px; color: #aaaaaa; x: 12px; y: 8px; }
+        VerticalLayout {
+            x: 12px;
+            y: 30px;
+            spacing: 6px;
+            width: 196px;
+            Rectangle {
+                height: 8px;
+                background: #222222;
+                border-radius: 4px;
+
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.audio_level_left;
+                    height: 100%;
+                    background: root.audio_clip_left ? #ff3b30 : root.audio_level_left >= 0.82 ? #ffcc00 : #4cd964;
+                    border-radius: 4px;
+                }
+
+                Rectangle {
+                    x: parent.width * root.audio_peak_left - 1px;
+                    width: 2px;
+                    height: 100%;
+                    background: #ffffff;
+                    visible: root.audio_peak_left > 0;
+                }
+            }
+            Rectangle {
+                height: 8px;
+                background: #222222;
+                border-radius: 4px;
+
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.audio_level_right;
+                    height: 100%;
+                    background: root.audio_clip_right ? #ff3b30 : root.audio_level_right >= 0.82 ? #ffcc00 : #4cd964;
+                    border-radius: 4px;
+                }
+
+                Rectangle {
+                    x: parent.width * root.audio_peak_right - 1px;
+                    width: 2px;
+                    height: 100%;
+                    background: #ffffff;
+                    visible: root.audio_peak_right > 0;
+                }
+            }
+            Text { text: "-45  -30  -20  -10  -6  -3  0  3"; font-size: 9px; color: #666666; }
+        }
+    }
+
+    Rectangle {
+        visible: !root.compact_mode;
+        x: root.width - root.control_strip_width;
+        y: 0;
+        width: root.control_strip_width;
+        height: root.height;
+        background: #090a0c;
+        border-width: 1px;
+        border-color: #1a1c1f;
+
+        VerticalLayout {
+            padding-top: 30px;
+            padding-bottom: 30px;
+            alignment: space-between;
+
+            VerticalLayout {
+                spacing: 25px;
+                HorizontalLayout { alignment: center; Rectangle { width: 40px; height: 40px; border-width: 1px; border-color: #444444; border-radius: 5px; Text { text: "CAM"; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; } } }
+                HorizontalLayout { alignment: center; Rectangle { width: 40px; height: 40px; border-width: 1px; border-color: #444444; border-radius: 5px; Image { width: 22px; height: 22px; x: parent.width / 2 - self.width / 2; y: parent.height / 2 - self.height / 2; source: @image-url("assets/img/zoom.png"); image-fit: contain; } } }
+            }
+
+            TouchArea {
+                enabled: !root.record_busy;
+                clicked => { root.toggle_record(); }
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 76px;
+                        height: 76px;
+                        border-radius: 38px;
+                        border-width: 4px;
+                        border-color: #ffffff;
+                        background: transparent;
+
+                        Rectangle {
+                            x: parent.width / 2 - (root.is_recording ? 20px : 26px);
+                            y: parent.height / 2 - (root.is_recording ? 20px : 26px);
+                            width: root.is_recording ? 40px : 52px;
+                            height: root.is_recording ? 40px : 52px;
+                            border-radius: root.is_recording ? 6px : 26px;
+                            background: #ff3b30;
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 25px;
+                HorizontalLayout { alignment: center; Rectangle { width: 45px; height: 30px; background: #222222; border-radius: 4px; Text { text: "LUT"; font-size: 12px; font-weight: 800; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; } } }
+                HorizontalLayout { alignment: center; Rectangle { width: 40px; height: 40px; border-width: 1px; border-color: #444444; border-radius: 5px; Text { text: "MENU"; font-size: 10px; color: #aaaaaa; horizontal-alignment: center; vertical-alignment: center; } } }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.compact_mode && !root.media_open;
+        x: 0;
+        y: root.height - self.height;
+        width: root.width;
+        height: 72px;
+        background: rgba(0, 0, 0, 0.6);
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            alignment: space-between;
+
+            // Left block: Status (Dot and label, and media detail)
+            VerticalLayout {
+                alignment: center;
+                width: 180px;
+
+                VerticalLayout {
+                    spacing: 5px;
+                    alignment: center;
+
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 6px;
+
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 10px;
+                                height: 10px;
+                                border-radius: 5px;
+                                background: root.is_recording ? #ff3b30 : (root.record_busy ? #ff9500 : #4cd964);
+                            }
+                        }
+
+                        Text {
+                            text: root.current_media_status;
+                            font-size: 12px;
+                            font-weight: 800;
+                            color: #b5bcc8;
+                            font-family: "Rajdhani";
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: root.current_media_detail;
+                        font-size: 22px;
+                        font-weight: 700;
+                        color: #ffffff;
+                        font-family: "Rajdhani";
+                        overflow: elide;
+                    }
+                }
+            }
+
+            // Center block: REC Button + Timecode
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 16px;
+                    alignment: center;
+
+                    TouchArea {
+                        width: 76px;
+                        height: 46px;
+                        enabled: !root.record_busy;
+                        clicked => { root.toggle_record(); }
+
+                        Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            border-radius: 4px;
+                            border-width: 2px;
+                            border-color: #ff3b30;
+                            background: root.is_recording ? rgba(255, 59, 48, 0.3) : rgba(0, 0, 0, 0.4);
+
+                            Text {
+                                text: "REC";
+                                font-size: 22px;
+                                font-weight: 900;
+                                color: #ff3b30;
+                                font-family: "Rajdhani";
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: root.timecode;
+                        font-size: 38px;
+                        font-weight: 700;
+                        color: root.is_recording ? #ff3b30 : #ffffff;
+                        font-family: "Rajdhani";
+                        vertical-alignment: center;
+                        width: 180px;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            // Right block: Settings Gear
+            VerticalLayout {
+                alignment: center;
+                TouchArea {
+                    width: 52px;
+                    height: 52px;
+                    clicked => { root.toggle_settings(); }
+                    Image {
+                        width: 36px;
+                        height: 36px;
+                        x: parent.width / 2 - self.width / 2;
+                        y: parent.height / 2 - self.height / 2;
+                        source: @image-url("assets/img/settings.png");
+                        image-fit: contain;
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.compact_mode && root.record_busy && !root.is_recording;
+        x: root.width / 2 - self.width / 2;
+        y: root.height - 106px;
+        width: 92px;
+        height: 24px;
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.62);
+        border-width: 1px;
+        border-color: rgba(255, 196, 64, 0.42 + 0.36 * root.record_busy_pulse);
+
+        Rectangle {
+            x: 10px;
+            y: parent.height / 2 - self.height / 2;
+            width: 6px + 3px * root.record_busy_pulse;
+            height: self.width;
+            border-radius: self.width / 2;
+            background: rgba(255, 196, 64, 0.45 + 0.55 * root.record_busy_pulse);
+        }
+
+        Text {
+            text: "SAVING";
+            x: 8px;
+            width: parent.width - 8px;
+            font-size: 11px;
+            font-weight: 800;
+            color: rgba(255, 196, 64, 0.7 + 0.3 * root.record_busy_pulse);
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+
+    Rectangle {
+        visible: root.compact_mode && !root.media_open;
+        x: root.settings_open ? root.width - self.width - 10px : root.width + 12px;
+        y: 60px;
+        width: 188px;
+        height: 348px;
+        opacity: root.settings_open ? 1 : 0;
+        background: rgba(10, 12, 16, 0.90);
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: rgba(255, 255, 255, 0.08);
+        animate x { duration: 180ms; }
+        animate opacity { duration: 120ms; }
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            moved => {
+                if self.pressed && self.mouse-x > self.pressed-x + 40px {
+                    root.toggle_settings();
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: 12px;
+
+            // Title Bar
+            HorizontalLayout {
+                alignment: space-between;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "SETTINGS";
+                        font-size: 13px;
+                        font-weight: 800;
+                        color: #888888;
+                        font-family: "Rajdhani";
+                    }
+                }
+                TouchArea {
+                    width: 24px;
+                    height: 24px;
+                    clicked => { root.toggle_settings(); }
+                    Text {
+                        text: "✕";
+                        font-size: 14px;
+                        font-weight: 800;
+                        color: #ffffff;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        font-family: "Rajdhani";
+                    }
+                }
+            }
+
+            // Auto/Manual Segmented Toggle
+            Rectangle {
+                width: 164px;
+                height: 36px;
+                background: rgba(255, 255, 255, 0.04);
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: rgba(255, 255, 255, 0.06);
+
+                HorizontalLayout {
+                    spacing: 0px;
+                    TouchArea {
+                        clicked => { root.toggle_full_auto(); }
+                        width: 82px;
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            border-radius: 5px;
+                            background: root.full_auto ? rgba(255, 255, 255, 0.10) : transparent;
+                            Text {
+                                text: "AUTO";
+                                font-size: 12px;
+                                font-weight: 800;
+                                color: root.full_auto ? #ffffff : #888888;
+                                font-family: "Rajdhani";
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    TouchArea {
+                        clicked => { root.toggle_full_auto(); }
+                        width: 82px;
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            border-radius: 5px;
+                            background: !root.full_auto ? rgba(255, 255, 255, 0.10) : transparent;
+                            Text {
+                                text: "MANUAL";
+                                font-size: 12px;
+                                font-weight: 800;
+                                color: !root.full_auto ? #ffffff : #888888;
+                                font-family: "Rajdhani";
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Settings Grid (FPS, SHUTTER, ISO, WB)
+            HorizontalLayout {
+                spacing: 8px;
+
+                VerticalLayout {
+                    spacing: 8px;
+
+                    TouchArea {
+                        clicked => { root.select_setting(0); }
+                        Rectangle {
+                            width: 78px;
+                            height: 56px;
+                            border-radius: 8px;
+                            background: root.selected_setting == 0 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
+                            border-width: 1px;
+                            border-color: root.selected_setting == 0 ? #ff3b30 : rgba(255, 255, 255, 0.06);
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text { text: "FPS"; font-size: 13px; font-weight: 800; color: root.selected_setting == 0 ? #ff5c5c : #888888; font-family: "Rajdhani"; horizontal-alignment: center; }
+                                Text { text: root.current_fps; font-size: 20px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; horizontal-alignment: center; }
+                            }
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => { root.select_setting(1); }
+                        Rectangle {
+                            width: 78px;
+                            height: 56px;
+                            border-radius: 8px;
+                            background: root.selected_setting == 1 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
+                            border-width: 1px;
+                            border-color: root.selected_setting == 1 ? #ff3b30 : rgba(255, 255, 255, 0.06);
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text { text: "SHUTTER"; font-size: 12px; font-weight: 800; color: root.selected_setting == 1 ? #ff5c5c : #888888; font-family: "Rajdhani"; horizontal-alignment: center; }
+                                Text { text: root.current_shutter; font-size: 18px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; horizontal-alignment: center; }
+                            }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 8px;
+
+                    TouchArea {
+                        clicked => { root.select_setting(2); }
+                        Rectangle {
+                            width: 78px;
+                            height: 56px;
+                            border-radius: 8px;
+                            background: root.selected_setting == 2 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
+                            border-width: 1px;
+                            border-color: root.selected_setting == 2 ? #ff3b30 : rgba(255, 255, 255, 0.06);
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text { text: "ISO"; font-size: 13px; font-weight: 800; color: root.selected_setting == 2 ? #ff5c5c : #888888; font-family: "Rajdhani"; horizontal-alignment: center; }
+                                Text { text: root.current_iso; font-size: 20px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; horizontal-alignment: center; }
+                            }
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => { root.select_setting(3); }
+                        Rectangle {
+                            width: 78px;
+                            height: 56px;
+                            border-radius: 8px;
+                            background: root.selected_setting == 3 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
+                            border-width: 1px;
+                            border-color: root.selected_setting == 3 ? #ff3b30 : rgba(255, 255, 255, 0.06);
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text { text: "WB"; font-size: 13px; font-weight: 800; color: root.selected_setting == 3 ? #ff5c5c : #888888; font-family: "Rajdhani"; horizontal-alignment: center; }
+                                Text { text: root.current_wb; font-size: 18px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; horizontal-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Rec Format selection
+            TouchArea {
+                clicked => { root.select_setting(4); }
+                Rectangle {
+                    width: 164px;
+                    height: 48px;
+                    border-radius: 8px;
+                    background: root.selected_setting == 4 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
+                    border-width: 1px;
+                    border-color: root.selected_setting == 4 ? #ff3b30 : rgba(255, 255, 255, 0.06);
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        alignment: space-between;
+
+                        Text { text: "FORMAT"; font-size: 13px; font-weight: 800; color: root.selected_setting == 4 ? #ff5c5c : #888888; font-family: "Rajdhani"; vertical-alignment: center; }
+                        Text { text: root.current_record_format; font-size: 18px; font-weight: 800; color: #ffffff; font-family: "Rajdhani"; vertical-alignment: center; }
+                    }
+                }
+            }
+
+        }
+    }
+
+    // Floating View Aids Overlay (Right side of screen in compact mode)
+    VerticalLayout {
+        visible: root.compact_mode && !root.media_open && !root.settings_open;
+        x: root.width - self.width - 10px;
+        y: root.height / 2 - self.height / 2;
+        width: 60px;
+        spacing: 16px;
+        alignment: center;
+
+        // Grid Button
+        TouchArea {
+            width: 56px;
+            height: 56px;
+            clicked => { root.grid_visible = !root.grid_visible; }
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                border-radius: 28px;
+                background: root.grid_visible ? rgba(255, 255, 255, 0.25) : rgba(0, 0, 0, 0.35);
+                border-width: 1px;
+                border-color: root.grid_visible ? rgba(255, 255, 255, 0.5) : rgba(255, 255, 255, 0.12);
+                Image {
+                    width: 26px;
+                    height: 26px;
+                    x: parent.width / 2 - self.width / 2;
+                    y: parent.height / 2 - self.height / 2;
+                    source: @image-url("assets/img/grid.png");
+                    image-fit: contain;
+                    opacity: root.grid_visible ? 1 : 0.6;
+                }
+            }
+        }
+
+        // Focus Peaking Button
+        TouchArea {
+            width: 56px;
+            height: 56px;
+            clicked => {
+                root.focus_peaking_visible = !root.focus_peaking_visible;
+                root.toggle_focus_peaking();
+            }
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                border-radius: 28px;
+                background: root.focus_peaking_visible ? rgba(255, 255, 255, 0.25) : rgba(0, 0, 0, 0.35);
+                border-width: 1px;
+                border-color: root.focus_peaking_visible ? rgba(255, 255, 255, 0.5) : rgba(255, 255, 255, 0.12);
+                Image {
+                    width: 26px;
+                    height: 26px;
+                    x: parent.width / 2 - self.width / 2;
+                    y: parent.height / 2 - self.height / 2;
+                    source: @image-url("assets/img/peak.png");
+                    image-fit: contain;
+                    opacity: root.focus_peaking_visible ? 1 : 0.6;
+                }
+            }
+        }
+
+        // Zoom Button
+        TouchArea {
+            width: 56px;
+            height: 56px;
+            clicked => { root.zoom_magnifier_visible = !root.zoom_magnifier_visible; }
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                border-radius: 28px;
+                background: root.zoom_magnifier_visible ? rgba(255, 255, 255, 0.25) : rgba(0, 0, 0, 0.35);
+                border-width: 1px;
+                border-color: root.zoom_magnifier_visible ? rgba(255, 255, 255, 0.5) : rgba(255, 255, 255, 0.12);
+                Image {
+                    width: 26px;
+                    height: 26px;
+                    x: parent.width / 2 - self.width / 2;
+                    y: parent.height / 2 - self.height / 2;
+                    source: @image-url("assets/img/zoom.png");
+                    image-fit: contain;
+                    opacity: root.zoom_magnifier_visible ? 1 : 0.6;
+                }
+            }
+        }
+
+        // Exposure traffic-light toggle
+        TouchArea {
+            width: 56px;
+            height: 56px;
+            clicked => { root.exposure_overlay_visible = !root.exposure_overlay_visible; }
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                border-radius: 28px;
+                background: root.exposure_overlay_visible ? rgba(255, 255, 255, 0.25) : rgba(0, 0, 0, 0.35);
+                border-width: 1px;
+                border-color: root.exposure_overlay_visible ? rgba(255, 255, 255, 0.5) : rgba(255, 255, 255, 0.12);
+                Image {
+                    width: 26px;
+                    height: 26px;
+                    x: parent.width / 2 - self.width / 2;
+                    y: parent.height / 2 - self.height / 2;
+                    source: @image-url("assets/img/traffic.png");
+                    image-fit: contain;
+                    opacity: root.exposure_overlay_visible ? 1 : 0.6;
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.compact_mode && !root.media_open;
+        x: root.settings_open ? 10px : -self.width - 12px;
+        y: 60px;
+        width: 122px;
+        height: 348px;
+        opacity: root.settings_open ? 1 : 0;
+        background: rgba(10, 12, 16, 0.90);
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: rgba(255, 255, 255, 0.08);
+        animate x { duration: 180ms; }
+        animate opacity { duration: 120ms; }
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            moved => {
+                if self.pressed && self.pressed-x > self.mouse-x + 40px {
+                    root.toggle_settings();
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: 8px;
+            alignment: center;
+
+            // Title of selected setting
+            Text {
+                text: root.selected_setting_label;
+                font-size: 12px;
+                font-weight: 800;
+                color: #888888;
+                font-family: "Rajdhani";
+                horizontal-alignment: center;
+            }
+
+            // Up adjust button
+            TouchArea {
+                height: 68px;
+                clicked => { root.adjust_setting(-1); }
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    border-radius: 8px;
+                    background: rgba(255, 255, 255, 0.04);
+                    border-width: 1px;
+                    border-color: rgba(255, 255, 255, 0.06);
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        Text { text: "▲"; font-size: 14px; color: #888888; horizontal-alignment: center; }
+                        Text { text: root.selected_setting_prev_value; font-size: 16px; font-weight: 700; color: #aaaaaa; font-family: "Rajdhani"; horizontal-alignment: center; }
+                    }
+                }
+            }
+
+            // Active/Current value display
+            Rectangle {
+                width: 100%;
+                height: 108px;
+                border-radius: 8px;
+                background: rgba(255, 59, 48, 0.15);
+                border-width: 1px;
+                border-color: #ff3b30;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text { text: root.selected_setting_value; font-size: 28px; font-weight: 800; color: #ffffff; font-family: "Rajdhani"; horizontal-alignment: center; }
+                    Text { text: "CURRENT"; font-size: 12px; font-weight: 800; color: #ff5c5c; font-family: "Rajdhani"; horizontal-alignment: center; }
+                }
+            }
+
+            // Down adjust button
+            TouchArea {
+                height: 68px;
+                clicked => { root.adjust_setting(1); }
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    border-radius: 8px;
+                    background: rgba(255, 255, 255, 0.04);
+                    border-width: 1px;
+                    border-color: rgba(255, 255, 255, 0.06);
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        Text { text: root.selected_setting_next_value; font-size: 16px; font-weight: 700; color: #aaaaaa; font-family: "Rajdhani"; horizontal-alignment: center; }
+                        Text { text: "▼"; font-size: 14px; color: #888888; horizontal-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.compact_mode && root.media_open;
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        background: #0a0c10;
+
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: 12px;
+
+            // Header Bar
+            Rectangle {
+                width: 100%;
+                height: 56px;
+                background: transparent;
+
+                HorizontalLayout {
+                    alignment: space-between;
+
+                    // Close Button
+                    TouchArea {
+                        width: 48px;
+                        height: 48px;
+                        clicked => { root.toggle_media(); }
+
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            border-radius: 24px;
+                            background: rgba(255, 255, 255, 0.08);
+                            border-width: 1px;
+                            border-color: rgba(255, 255, 255, 0.15);
+                            Text { text: "✕"; font-size: 20px; font-weight: 800; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                    }
+
+                    // Title
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "MEDIA BROWSER";
+                            font-size: 18px;
+                            font-weight: 800;
+                            color: #ffffff;
+                            font-family: "Rajdhani";
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    // Refresh Button
+                    TouchArea {
+                        width: 48px;
+                        height: 48px;
+                        clicked => { root.media_refresh(); }
+                        enabled: !root.media_loading;
+
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            border-radius: 24px;
+                            background: rgba(255, 255, 255, 0.08);
+                            border-width: 1px;
+                            border-color: rgba(255, 255, 255, 0.15);
+                            Text { text: "↻"; font-size: 22px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                    }
+                }
+            }
+
+            // Single Panel Scrollable Clip List
+            Rectangle {
+                width: 100%;
+                height: root.height - 92px; // 480 - 92 = 388px
+                background: rgba(0, 0, 0, 0.20);
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: rgba(255, 255, 255, 0.06);
+                clip: true;
+
+                scroll_view := ScrollView {
+                    width: 100%;
+                    height: 100%;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        for clip_row[index] in root.media_clip_rows : Rectangle {
+                            height: 96px;
+                            border-radius: 6px;
+                            background: root.media_selected_index == index ? rgba(255, 92, 92, 0.08) : rgba(255, 255, 255, 0.03);
+                            border-width: 1px;
+                            border-color: root.media_selected_index == index ? #ff5c5c : rgba(255, 255, 255, 0.06);
+
+                            // Selected left indicator bar
+                            Rectangle {
+                                x: 0;
+                                y: 0;
+                                width: 3px;
+                                height: 100%;
+                                background: #ff5c5c;
+                                visible: root.media_selected_index == index;
+                            }
+
+                            // If not selected, a single TouchArea covers the entire row
+                            if (root.media_selected_index != index) : TouchArea {
+                                clicked => {
+                                    let dy = (self.mouse-y - self.pressed-y) / 1px;
+                                    let dx = (self.mouse-x - self.pressed-x) / 1px;
+                                    if (dy * dy + dx * dx < 100) {
+                                        root.media_select(index);
+                                    }
+                                }
+                                moved => {
+                                    if (self.pressed) {
+                                        let min_y = scroll_view.height - scroll_view.viewport-height;
+                                        let max_y = 0px;
+                                        if (min_y > 0px) {
+                                            scroll_view.viewport-y = 0px;
+                                        } else {
+                                            scroll_view.viewport-y = max(min_y, min(max_y, scroll_view.viewport-y + self.mouse-y - self.pressed-y));
+                                        }
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    padding-top: 8px;
+                                    padding-bottom: 8px;
+                                    spacing: 16px;
+
+                                    // Thumbnail preview
+                                    Rectangle {
+                                        width: 120px;
+                                        height: 80px;
+                                        border-radius: 4px;
+                                        clip: true;
+                                        background: #15181c;
+
+                                        Image {
+                                            width: 100%;
+                                            height: 100%;
+                                            source: root.media_clip_thumbs[index];
+                                            image-fit: cover;
+                                        }
+                                    }
+
+                                    // Filename & metadata (flexible width)
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 4px;
+
+                                        Text {
+                                            text: clip_row;
+                                            font-size: 18px;
+                                            font-weight: 700;
+                                            color: #ffffff;
+                                            font-family: "Rajdhani";
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: "Tap to select options";
+                                            font-size: 13px;
+                                            color: #666666;
+                                            font-family: "Rajdhani";
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    // Duration badge on the right
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 80px;
+                                        Text {
+                                            text: root.media_clip_durations[index];
+                                            font-size: 16px;
+                                            font-weight: 700;
+                                            color: #ffffff;
+                                            font-family: "Rajdhani";
+                                            horizontal-alignment: right;
+                                        }
+                                        Text {
+                                            text: "SELECT";
+                                            font-size: 11px;
+                                            font-weight: 800;
+                                            color: #888888;
+                                            font-family: "Rajdhani";
+                                            horizontal-alignment: right;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // If selected, the row is split into Left/Middle selection area and Right Action area
+                            if (root.media_selected_index == index) : HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                padding-top: 8px;
+                                padding-bottom: 8px;
+                                spacing: 16px;
+
+                                TouchArea {
+                                    clicked => {
+                                        let dy = (self.mouse-y - self.pressed-y) / 1px;
+                                        let dx = (self.mouse-x - self.pressed-x) / 1px;
+                                        if (dy * dy + dx * dx < 100) {
+                                            root.media_select(index);
+                                        }
+                                    }
+                                    moved => {
+                                        if (self.pressed) {
+                                            let min_y = scroll_view.height - scroll_view.viewport-height;
+                                            let max_y = 0px;
+                                            if (min_y > 0px) {
+                                                scroll_view.viewport-y = 0px;
+                                            } else {
+                                                scroll_view.viewport-y = max(min_y, min(max_y, scroll_view.viewport-y + self.mouse-y - self.pressed-y));
+                                            }
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 16px;
+                                        alignment: start;
+
+                                        // Thumbnail preview
+                                        Rectangle {
+                                            width: 120px;
+                                            height: 80px;
+                                            border-radius: 4px;
+                                            clip: true;
+                                            background: #15181c;
+
+                                            Image {
+                                                width: 100%;
+                                                height: 100%;
+                                                source: root.media_clip_thumbs[index];
+                                                image-fit: cover;
+                                            }
+                                        }
+
+                                        // Filename & detail text
+                                        VerticalLayout {
+                                            alignment: center;
+                                            spacing: 4px;
+
+                                            Text {
+                                                text: clip_row;
+                                                font-size: 18px;
+                                                font-weight: 700;
+                                                color: #ffffff;
+                                                font-family: "Rajdhani";
+                                                overflow: elide;
+                                            }
+
+                                            Text {
+                                                text: root.media_selected_detail;
+                                                font-size: 13px;
+                                                color: #aaaaaa;
+                                                font-family: "Rajdhani";
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Actions when selected
+                                VerticalLayout {
+                                    alignment: center;
+                                    width: 124px;
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: end;
+
+                                        // Play button
+                                        TouchArea {
+                                            width: 58px;
+                                            height: 48px;
+                                            clicked => { root.media_play(index); }
+                                            Rectangle {
+                                                width: 100%;
+                                                height: 100%;
+                                                border-radius: 4px;
+                                                background: #10b981;
+
+                                                Text {
+                                                    text: "▶";
+                                                    font-size: 20px;
+                                                    color: #ffffff;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+
+                                        // Delete button
+                                        TouchArea {
+                                            width: 58px;
+                                            height: 48px;
+                                            enabled: !root.media_loading;
+                                            clicked => { root.delete_confirm_open = true; }
+                                            Rectangle {
+                                                width: 100%;
+                                                height: 100%;
+                                                border-radius: 4px;
+                                                background: rgba(255, 92, 92, 0.1);
+                                                border-width: 1px;
+                                                border-color: #ff5c5c;
+
+                                                Text {
+                                                    text: "✕";
+                                                    font-size: 20px;
+                                                    color: #ff5c5c;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Spinning loading icon in center
+                VerticalLayout {
+                    visible: root.media_loading && root.media_clip_rows.length == 0;
+                    width: parent.width;
+                    y: parent.height / 2 - self.height / 2;
+                    spacing: 12px;
+                    alignment: center;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: "↻";
+                            font-size: 32px;
+                            color: #ff5c5c;
+                            font-family: "Rajdhani";
+                            transform-rotation: root.media_loading_pulse * 1deg;
+                        }
+                    }
+
+                    Text {
+                        text: "Scanning recordings...";
+                        color: #888888;
+                        font-size: 14px;
+                        font-family: "Rajdhani";
+                        horizontal-alignment: center;
+                    }
+                }
+
+                // Empty state message
+                Text {
+                    visible: !root.media_loading && root.media_clip_rows.length == 0;
+                    width: parent.width;
+                    y: parent.height / 2 - self.height / 2;
+                    text: "No clips found";
+                    color: #888888;
+                    font-size: 14px;
+                    font-family: "Rajdhani";
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Delete Confirmation Overlay Modal
+        if (root.delete_confirm_open) : Rectangle {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+
+            TouchArea {
+                clicked => { root.delete_confirm_open = false; }
+            }
+
+            Rectangle {
+                width: 440px;
+                height: 250px;
+                x: parent.width / 2 - self.width / 2;
+                y: parent.height / 2 - self.height / 2;
+                background: rgba(20, 10, 10, 0.95);
+                border-radius: 12px;
+                border-width: 2px;
+                border-color: #ff5c5c;
+
+                VerticalLayout {
+                    padding: 24px;
+                    alignment: space-between;
+                    spacing: 16px;
+
+                    VerticalLayout {
+                        spacing: 10px;
+                        alignment: center;
+                        Text {
+                            text: "⚠️ DELETE FILE?";
+                            font-size: 24px;
+                            font-weight: 800;
+                            color: #ff5c5c;
+                            font-family: "Rajdhani";
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: root.media_selected_name;
+                            font-size: 16px;
+                            font-weight: 600;
+                            color: #ffffff;
+                            font-family: "Rajdhani";
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "This action cannot be undone.";
+                            font-size: 14px;
+                            color: #888888;
+                            font-family: "Rajdhani";
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 20px;
+                        alignment: center;
+
+                        // Cancel Button
+                        TouchArea {
+                            width: 170px;
+                            height: 56px;
+                            clicked => { root.delete_confirm_open = false; }
+                            Rectangle {
+                                width: 100%;
+                                height: 100%;
+                                border-radius: 8px;
+                                background: rgba(255, 255, 255, 0.08);
+                                border-width: 1px;
+                                border-color: rgba(255, 255, 255, 0.15);
+                                Text {
+                                    text: "CANCEL";
+                                    font-size: 18px;
+                                    font-weight: 800;
+                                    color: #ffffff;
+                                    font-family: "Rajdhani";
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Confirm Button
+                        TouchArea {
+                            width: 170px;
+                            height: 56px;
+                            clicked => {
+                                root.delete_confirm_open = false;
+                                root.media_delete_selected();
+                            }
+                            Rectangle {
+                                width: 100%;
+                                height: 100%;
+                                border-radius: 8px;
+                                background: #ff5c5c;
+                                Text {
+                                    text: "DELETE";
+                                    font-size: 18px;
+                                    font-weight: 900;
+                                    color: #ffffff;
+                                    font-family: "Rajdhani";
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
