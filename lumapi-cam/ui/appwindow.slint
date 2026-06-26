@@ -88,6 +88,8 @@ export component AppWindow inherits Window {
     in-out property <string> system_version: "lumapi-cam v2.1.0";
     in-out property <bool> screen_blanked: false;
     in-out property <int> display_timeout_index: 0;
+    in-out property <int> record_res_index: 0;
+    in-out property <int> record_format_index: 0;
 
     in-out property <bool> wifi_scanning: false;
     in-out property <[WifiNetwork]> wifi_networks: [];
@@ -125,6 +127,8 @@ export component AppWindow inherits Window {
     callback wifi_connect(string, string);
     callback wifi_type_key(string);
     callback wifi_backspace();
+    callback change_record_res(int);
+    callback change_record_format(int);
 
     Rectangle {
         x: 0;
@@ -235,7 +239,7 @@ export component AppWindow inherits Window {
                         spacing: 2px;
                         alignment: center;
 
-                        for idx in [0, 1, 2, 3, 4] : TouchArea {
+                        for idx in [0, 1, 2, 3, 4, 5] : TouchArea {
                             width: 60px;
                             height: 52px;
                             clicked => { root.system_select_tab(idx); }
@@ -283,12 +287,14 @@ export component AppWindow inherits Window {
                                     width: 22px;
                                     height: 22px;
                                     Path {
-                                        width: 100%;
-                                        height: 100%;
+                                        width: 22px;
+                                        height: 22px;
+                                        viewbox-width: 22;
+                                        viewbox-height: 22;
                                         stroke: root.system_tab_index == idx ? #ff5c5c : #888888;
                                         stroke-width: 1.8px;
                                         fill: root.system_tab_index == idx ? rgba(255, 92, 92, 0.15) : transparent;
-                                        commands: "M 3 7 L 8 7 L 14 2 L 14 20 L 8 15 L 3 15 Z";
+                                        commands: "M 5 7 L 10 7 L 16 2 L 16 20 L 10 15 L 5 15 Z";
                                     }
                                 }
 
@@ -335,8 +341,24 @@ export component AppWindow inherits Window {
                                     Rectangle { x: 16px; y: 2px; width: 3.5px; height: 18px; background: root.system_tab_index == idx ? #ff5c5c : #888888; border-radius: 0.5px; }
                                 }
 
-                                // System tab icon (CPU/Chip layout)
+                                // Camera Resolution tab icon (Video camera)
                                 if (idx == 4) : Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    Path {
+                                        width: 22px;
+                                        height: 22px;
+                                        viewbox-width: 22;
+                                        viewbox-height: 22;
+                                        stroke: root.system_tab_index == idx ? #ff5c5c : #888888;
+                                        stroke-width: 1.8px;
+                                        fill: root.system_tab_index == idx ? rgba(255, 92, 92, 0.15) : transparent;
+                                        commands: "M 2 5 H 13 V 17 H 2 Z M 13 9 L 20 5 V 17 L 13 13 Z";
+                                    }
+                                }
+
+                                // System tab icon (CPU/Chip layout)
+                                if (idx == 5) : Rectangle {
                                     width: 22px;
                                     height: 22px;
                                     Rectangle {
@@ -1244,8 +1266,135 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                    // --- System Tab ---
+                    // --- Camera Resolution Tab ---
                     if (root.system_tab_index == 4) : VerticalLayout {
+                        padding: 16px;
+                        spacing: 20px;
+                        alignment: start;
+
+                        Text {
+                            text: "CAMERA";
+                            font-size: 22px;
+                            font-weight: 800;
+                            color: #ff5c5c;
+                            font-family: "Rajdhani";
+                        }
+
+                        // Recording Resolution Selector
+                        VerticalLayout {
+                            spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    Path {
+                                        width: 100%;
+                                        height: 100%;
+                                        stroke: #b5bcc8;
+                                        stroke-width: 1.8px;
+                                        fill: rgba(181, 188, 200, 0.12);
+                                        commands: "M 2 5 H 13 V 17 H 2 Z M 13 9 L 20 5 V 17 L 13 13 Z";
+                                    }
+                                }
+                                Text { text: "RECORDING RESOLUTION"; font-size: 14px; font-weight: 800; color: #b5bcc8; font-family: "Rajdhani"; vertical-alignment: center; }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                for res_label[idx] in ["720p (1140x720)", "1080p (1920x1080)"] : TouchArea {
+                                    height: 40px;
+                                    clicked => {
+                                        root.record_res_index = idx;
+                                        root.change_record_res(idx);
+                                    }
+                                    Rectangle {
+                                        width: 100%;
+                                        height: 100%;
+                                        border-radius: 6px;
+                                        background: root.record_res_index == idx ? rgba(255, 59, 48, 0.18) : rgba(255, 255, 255, 0.04);
+                                        border-width: 1px;
+                                        border-color: root.record_res_index == idx ? #ff3b30 : rgba(255, 255, 255, 0.08);
+
+                                        animate background { duration: 200ms; }
+                                        animate border-color { duration: 200ms; }
+
+                                        Text {
+                                            text: res_label;
+                                            font-size: 14px;
+                                            font-weight: 800;
+                                            color: root.record_res_index == idx ? #ff5c5c : #b5bcc8;
+                                            font-family: "Rajdhani";
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+
+                                            animate color { duration: 200ms; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // File Container Format Selector
+                        VerticalLayout {
+                            spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    Path {
+                                        width: 100%;
+                                        height: 100%;
+                                        stroke: #b5bcc8;
+                                        stroke-width: 1.8px;
+                                        fill: rgba(181, 188, 200, 0.12);
+                                        commands: "M 4 2 H 13 L 18 7 V 20 H 4 Z M 12 2 V 8 H 18";
+                                    }
+                                }
+                                Text { text: "FILE CONTAINER FORMAT"; font-size: 14px; font-weight: 800; color: #b5bcc8; font-family: "Rajdhani"; vertical-alignment: center; }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                for fmt_label[idx] in ["MP4", "MKV"] : TouchArea {
+                                    height: 40px;
+                                    clicked => {
+                                        root.record_format_index = idx;
+                                        root.change_record_format(idx);
+                                    }
+                                    Rectangle {
+                                        width: 100%;
+                                        height: 100%;
+                                        border-radius: 6px;
+                                        background: root.record_format_index == idx ? rgba(255, 59, 48, 0.18) : rgba(255, 255, 255, 0.04);
+                                        border-width: 1px;
+                                        border-color: root.record_format_index == idx ? #ff3b30 : rgba(255, 255, 255, 0.08);
+
+                                        animate background { duration: 200ms; }
+                                        animate border-color { duration: 200ms; }
+
+                                        Text {
+                                            text: fmt_label;
+                                            font-size: 14px;
+                                            font-weight: 800;
+                                            color: root.record_format_index == idx ? #ff5c5c : #b5bcc8;
+                                            font-family: "Rajdhani";
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+
+                                            animate color { duration: 200ms; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // --- System Tab ---
+                    if (root.system_tab_index == 5) : VerticalLayout {
                         padding: 16px;
                         spacing: 12px;
                         alignment: start;
@@ -2506,7 +2655,8 @@ export component AppWindow inherits Window {
             padding-right: 12px;
             padding-top: 12px;
             padding-bottom: 12px;
-            spacing: 12px;
+            spacing: 14px;
+            alignment: start;
 
             // Title Bar
             HorizontalLayout {
@@ -2600,7 +2750,7 @@ export component AppWindow inherits Window {
                         clicked => { root.select_setting(0); }
                         Rectangle {
                             width: 78px;
-                            height: 56px;
+                            height: 62px;
                             border-radius: 8px;
                             background: root.selected_setting == 0 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
                             border-width: 1px;
@@ -2618,7 +2768,7 @@ export component AppWindow inherits Window {
                         clicked => { root.select_setting(1); }
                         Rectangle {
                             width: 78px;
-                            height: 56px;
+                            height: 62px;
                             border-radius: 8px;
                             background: root.selected_setting == 1 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
                             border-width: 1px;
@@ -2640,7 +2790,7 @@ export component AppWindow inherits Window {
                         clicked => { root.select_setting(2); }
                         Rectangle {
                             width: 78px;
-                            height: 56px;
+                            height: 62px;
                             border-radius: 8px;
                             background: root.selected_setting == 2 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
                             border-width: 1px;
@@ -2658,7 +2808,7 @@ export component AppWindow inherits Window {
                         clicked => { root.select_setting(3); }
                         Rectangle {
                             width: 78px;
-                            height: 56px;
+                            height: 62px;
                             border-radius: 8px;
                             background: root.selected_setting == 3 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
                             border-width: 1px;
@@ -2670,28 +2820,6 @@ export component AppWindow inherits Window {
                                 Text { text: root.current_wb; font-size: 18px; font-weight: 700; color: #ffffff; font-family: "Rajdhani"; horizontal-alignment: center; }
                             }
                         }
-                    }
-                }
-            }
-
-            // Rec Format selection
-            TouchArea {
-                clicked => { root.select_setting(4); }
-                Rectangle {
-                    width: 164px;
-                    height: 48px;
-                    border-radius: 8px;
-                    background: root.selected_setting == 4 ? rgba(255, 59, 48, 0.2) : rgba(255, 255, 255, 0.04);
-                    border-width: 1px;
-                    border-color: root.selected_setting == 4 ? #ff3b30 : rgba(255, 255, 255, 0.06);
-
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        alignment: space-between;
-
-                        Text { text: "FORMAT"; font-size: 13px; font-weight: 800; color: root.selected_setting == 4 ? #ff5c5c : #888888; font-family: "Rajdhani"; vertical-alignment: center; }
-                        Text { text: root.current_record_format; font-size: 18px; font-weight: 800; color: #ffffff; font-family: "Rajdhani"; vertical-alignment: center; }
                     }
                 }
             }

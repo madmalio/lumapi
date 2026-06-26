@@ -120,11 +120,13 @@ class StreamingOutput(io.BufferedIOBase):
 
 
 class CameraService:
-    def __init__(self, width, height):
+    def __init__(self, width, height, record_width=None, record_height=None):
         self.picam2 = Picamera2()
         self.output = StreamingOutput()
         self.width = width
         self.height = height
+        self.record_width = record_width or width
+        self.record_height = record_height or height
         self.running = True
         os.makedirs(RECORDINGS_DIR, exist_ok=True)
         self._control_lock = threading.Lock()
@@ -150,10 +152,10 @@ class CameraService:
         self._audio_running = False
         self._audio_preroll = collections.deque(maxlen=max(1, RECORD_PREROLL_MS // AUDIO_CHUNK_MS + 2))
         self._active_audio_chunks = None
-
+ 
     def start(self, initial_controls):
         config = self.picam2.create_video_configuration(
-            main={"size": (self.width, self.height)},
+            main={"size": (self.record_width, self.record_height)},
             lores={"size": (self.width, self.height), "format": "YUV420"},
         )
         self.picam2.configure(config)
@@ -673,6 +675,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--width", type=int, default=1140)
     parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--record-width", type=int, default=None)
+    parser.add_argument("--record-height", type=int, default=None)
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--shutter-us", type=int, default=16667)
     parser.add_argument("--analogue-gain", type=float, default=1.0)
@@ -683,7 +687,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    camera_service = CameraService(args.width, args.height)
+    record_width = args.record_width if args.record_width is not None else args.width
+    record_height = args.record_height if args.record_height is not None else args.height
+    camera_service = CameraService(args.width, args.height, record_width, record_height)
     initial_controls = {
         "fps": args.fps,
         "shutter_us": args.shutter_us,

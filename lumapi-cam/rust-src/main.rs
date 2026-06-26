@@ -156,6 +156,7 @@ struct CameraSettingsState {
     wb_index: usize,
     record_format_index: usize,
     full_auto: bool,
+    record_res_index: usize,
 }
 
 impl CameraSettingsState {
@@ -212,12 +213,14 @@ impl Default for CameraSettingsState {
             wb_index: 0,
             record_format_index: 0,
             full_auto: false,
+            record_res_index: 0,
         }
     }
 }
 
 enum CameraControlMessage {
     Apply(CameraSettingsState),
+    Restart(CameraSettingsState),
 }
 
 #[derive(Serialize)]
@@ -579,6 +582,42 @@ fn main() {
         }
     });
 
+    app.on_change_record_res({
+        let app_handle = app_weak.clone();
+        let camera_settings_state = Arc::clone(&camera_settings_state);
+        let camera_control_tx = camera_control_tx.clone();
+        move |index| {
+            if let Ok(mut state) = camera_settings_state.lock() {
+                state.record_res_index = index as usize;
+                save_camera_settings(&state);
+
+                if let Some(ui) = app_handle.upgrade() {
+                    sync_camera_settings_to_ui(&ui, &state);
+                }
+
+                let _ = camera_control_tx.send(CameraControlMessage::Restart(state.clone()));
+            }
+        }
+    });
+
+    app.on_change_record_format({
+        let app_handle = app_weak.clone();
+        let camera_settings_state = Arc::clone(&camera_settings_state);
+        let camera_control_tx = camera_control_tx.clone();
+        move |index| {
+            if let Ok(mut state) = camera_settings_state.lock() {
+                state.record_format_index = index as usize;
+                save_camera_settings(&state);
+
+                if let Some(ui) = app_handle.upgrade() {
+                    sync_camera_settings_to_ui(&ui, &state);
+                }
+
+                let _ = camera_control_tx.send(CameraControlMessage::Apply(state.clone()));
+            }
+        }
+    });
+
     app.on_set_backlight({
         move |level| {
             #[cfg(target_os = "linux")]
@@ -763,7 +802,6 @@ fn apply_default_camera_settings(app: &AppWindow, camera_settings_state: &Arc<Mu
         sync_camera_settings_to_ui(app, &state);
     }
 
-    apply_resolution_to_ui(app, DEFAULT_CAMERA_WIDTH, DEFAULT_CAMERA_HEIGHT);
     app.set_current_tint(DEFAULT_TINT_DISPLAY.into());
     app.set_record_busy(false);
     app.set_record_busy_pulse(0.0);
@@ -810,6 +848,14 @@ fn sync_camera_settings_to_ui(app: &AppWindow, state: &CameraSettingsState) {
     app.set_current_iso(ISO_OPTIONS[state.iso_index].into());
     app.set_current_wb(WB_OPTIONS[state.wb_index].into());
     app.set_current_record_format(RECORD_FORMAT_OPTIONS[state.record_format_index].into());
+    app.set_record_format_index(state.record_format_index as i32);
+    app.set_record_res_index(state.record_res_index as i32);
+
+    let (w, h) = match state.record_res_index {
+        1 => (1920, 1080),
+        _ => (DEFAULT_CAMERA_WIDTH, DEFAULT_CAMERA_HEIGHT),
+    };
+    apply_resolution_to_ui(app, w, h);
 
     let (label, previous, current, next) = selected_setting_display(state);
     app.set_selected_setting_label(label.into());
@@ -2088,28 +2134,38 @@ fn start_camera_control_loop(
             eprintln!("camera service did not become ready; check {CAMERA_SERVICE_LOG_PATH}");
         }
 
-        while let Ok(CameraControlMessage::Apply(settings)) = camera_control_rx.recv() {
-            if let Err(error) = send_camera_controls(&settings) {
-                eprintln!("failed to apply live camera controls: {error}");
-
-                if let Some(mut process) = active_process.take() {
-                    let _ = process.kill();
-                    let _ = process.wait();
+        while let Ok(msg) = camera_control_rx.recv() {
+            match msg {
+                CameraControlMessage::Apply(settings) => {
+                    if let Err(error) = send_camera_controls(&settings) {
+                        eprintln!("failed to apply live camera controls: {error}");
+                        restart_camera_service(&mut active_process, &settings);
+                    }
                 }
-
-                match spawn_camera_service_process(&settings) {
-                    Ok(child) => {
-                        active_process = Some(child);
-                        let _ = wait_for_camera_service(Duration::from_secs(5));
-                        let _ = send_camera_controls(&settings);
-                    }
-                    Err(spawn_error) => {
-                        eprintln!("failed to restart camera service: {spawn_error}");
-                    }
+                CameraControlMessage::Restart(settings) => {
+                    restart_camera_service(&mut active_process, &settings);
                 }
             }
         }
     });
+}
+
+fn restart_camera_service(active_process: &mut Option<Child>, settings: &CameraSettingsState) {
+    if let Some(mut process) = active_process.take() {
+        let _ = process.kill();
+        let _ = process.wait();
+    }
+
+    match spawn_camera_service_process(settings) {
+        Ok(child) => {
+            *active_process = Some(child);
+            let _ = wait_for_camera_service(Duration::from_secs(5));
+            let _ = send_camera_controls(settings);
+        }
+        Err(spawn_error) => {
+            eprintln!("failed to restart camera service: {spawn_error}");
+        }
+    }
 }
 
 fn spawn_camera_service_process(initial_settings: &CameraSettingsState) -> std::io::Result<Child> {
@@ -2120,6 +2176,11 @@ fn spawn_camera_service_process(initial_settings: &CameraSettingsState) -> std::
         .open(CAMERA_SERVICE_LOG_PATH)?;
     let log_file_err = log_file.try_clone()?;
 
+    let (rec_w, rec_h) = match initial_settings.record_res_index {
+        1 => (1920, 1080),
+        _ => (DEFAULT_CAMERA_WIDTH, DEFAULT_CAMERA_HEIGHT),
+    };
+
     Command::new("python3")
         .arg("-u")
         .arg(service_path)
@@ -2127,6 +2188,10 @@ fn spawn_camera_service_process(initial_settings: &CameraSettingsState) -> std::
         .arg(DEFAULT_CAMERA_WIDTH.to_string())
         .arg("--height")
         .arg(DEFAULT_CAMERA_HEIGHT.to_string())
+        .arg("--record-width")
+        .arg(rec_w.to_string())
+        .arg("--record-height")
+        .arg(rec_h.to_string())
         .arg("--fps")
         .arg(initial_settings.fps().to_string())
         .arg("--shutter-us")
