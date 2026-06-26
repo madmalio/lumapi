@@ -52,6 +52,9 @@ Current State Summary
 - Screen timeout monitors evdev touch events and blanks the display via `/sys/class/graphics/fb0/blank` after configurable idle time (Off / 1 min / 5 min / 10 min). Any touch unblanks the screen. Blanking is suppressed during recording.
 - All main UI overlays (top bar, bottom bar, exposure traffic, audio meter, settings drawers, view aids, SAVING indicator) check `!root.system_open` to prevent bleed-through onto the System Settings page.
 - Bracing and conditional tab checks in Slint are nested independently to prevent layout overlap.
+- Supported 1080p recording via the new Camera settings tab (index 4), which passes `--record-width` and `--record-height` to the Python camera sidecar so the live preview remains unchanged at 720p while recording captures at 1080p.
+- HUD settings drawer has been decluttered; the redundant video container format selector was removed.
+- Tab strip icons have been updated, but the Camera Resolution tab icon (Video camera) still exhibits slight edge clipping distortion when highlighted. This needs further refinement in Slint path definitions.
 
 Important User Preferences
 
@@ -166,7 +169,8 @@ Important Constraint
 
 Next Recommended Work
 
-1. Validate the asynchronous system status querying thread behavior on the Pi to confirm that no UI frame rates drop or touch events are lost.
-2. Verify Wi-Fi list scrolling, credential typing on the OSK, and dynamic connected badge coloring on the physical Waveshare panel.
-3. Verify that the side-by-side Reboot/Shutdown confirmation overlays execute correctly on the background thread on the physical target.
-4. Validate the screen timeout blanking/unblanking behaviour on-device under dynamic settings inputs.
+1. Fix the Camera Resolution tab icon distortion in the tab strip when highlighted.
+2. Validate the asynchronous system status querying thread behavior on the Pi to confirm that no UI frame rates drop or touch events are lost.
+3. Verify Wi-Fi list scrolling, credential typing on the OSK, and dynamic connected badge coloring on the physical Waveshare panel.
+4. Verify that the side-by-side Reboot/Shutdown confirmation overlays execute correctly on the background thread on the physical target.
+5. Validate the screen timeout blanking/unblanking behaviour on-device under dynamic settings inputs.
