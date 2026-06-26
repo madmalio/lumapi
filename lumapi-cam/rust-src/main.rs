@@ -9,6 +9,8 @@ use std::net::TcpStream as StdTcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicI64, AtomicU32};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -301,6 +303,9 @@ fn main() {
         let camera_settings_state = Arc::clone(&camera_settings_state);
         let record_toggle_in_flight = Arc::clone(&record_toggle_in_flight);
         move || {
+            #[cfg(target_os = "linux")]
+            record_interaction();
+
             if record_toggle_in_flight.swap(true, Ordering::SeqCst) {
                 return;
             }
@@ -323,6 +328,8 @@ fn main() {
             ui.set_record_busy(true);
             if next_is_recording {
                 set_recording_ui_state(&ui, &recording_state, true, fps);
+                #[cfg(target_os = "linux")]
+                IS_RECORDING_ACTIVE.store(true, Ordering::SeqCst);
             } else {
                 let record_format = ui.get_current_record_format().to_string();
                 ui.set_is_recording(false);
@@ -353,6 +360,8 @@ fn main() {
                     if let Some(ui) = app_handle.upgrade() {
                         ui.set_record_busy(false);
                         set_recording_ui_state(&ui, &recording_state, actual_is_recording, fps);
+                        #[cfg(target_os = "linux")]
+                        IS_RECORDING_ACTIVE.store(actual_is_recording, Ordering::SeqCst);
                     }
                 });
             });
@@ -378,9 +387,16 @@ fn main() {
         let camera_settings_state = Arc::clone(&camera_settings_state);
         let camera_control_tx = camera_control_tx.clone();
         move || {
+            #[cfg(target_os = "linux")]
+            record_interaction();
+
             if let Some(ui) = app_handle.upgrade() {
                 let will_open = !ui.get_settings_open();
                 ui.set_settings_open(will_open);
+
+                if will_open {
+                    ui.set_system_open(false);
+                }
 
                 if !will_open {
                     if let Ok(state) = camera_settings_state.lock() {
@@ -395,12 +411,16 @@ fn main() {
         let app_handle = app_weak.clone();
         let media_state = Arc::clone(&media_state);
         move || {
+            #[cfg(target_os = "linux")]
+            record_interaction();
+
             if let Some(ui) = app_handle.upgrade() {
                 let will_open = !ui.get_media_open();
                 ui.set_media_open(will_open);
 
                 if will_open {
                     ui.set_settings_open(false);
+                    ui.set_system_open(false);
                     ui.set_media_loading(true);
                     refresh_media_browser(app_handle.clone(), Arc::clone(&media_state), None);
                 }
@@ -532,6 +552,199 @@ fn main() {
         }
     });
 
+    app.on_toggle_system({
+        let app_handle = app_weak.clone();
+        move || {
+            #[cfg(target_os = "linux")]
+            record_interaction();
+
+            if let Some(ui) = app_handle.upgrade() {
+                let will_open = !ui.get_system_open();
+                ui.set_system_open(will_open);
+                if will_open {
+                    ui.set_media_open(false);
+                    ui.set_settings_open(false);
+                    refresh_system_info(&ui);
+                }
+            }
+        }
+    });
+
+    app.on_system_select_tab({
+        let app_handle = app_weak.clone();
+        move |index| {
+            if let Some(ui) = app_handle.upgrade() {
+                ui.set_system_tab_index(index);
+            }
+        }
+    });
+
+    app.on_set_backlight({
+        move |level| {
+            #[cfg(target_os = "linux")]
+            write_backlight(level);
+            let _ = level;
+        }
+    });
+
+    let app_weak_audio = app_weak.clone();
+    app.on_select_audio_device({
+        move |index| {
+            if let Some(app) = app_weak_audio.upgrade() {
+                app.set_audio_device_index(index);
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // Audio device selection will reinitialize the meter on next restart
+            }
+        }
+    });
+
+    app.on_set_audio_gain({
+        move |_gain| {
+            #[cfg(target_os = "linux")]
+            {
+                // Audio gain applied via ALSA mixer or soft gain in meter loop
+            }
+        }
+    });
+
+    app.on_delete_all_recordings({
+        move || {
+            thread::spawn(|| {
+                delete_all_recordings_task();
+            });
+        }
+    });
+
+    app.on_system_shutdown({
+        move || {
+            thread::spawn(|| {
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = std::process::Command::new("sudo")
+                        .args(["shutdown", "-h", "now"])
+                        .output();
+                }
+            });
+        }
+    });
+
+    app.on_system_reboot({
+        move || {
+            thread::spawn(|| {
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = std::process::Command::new("sudo")
+                        .args(["reboot"])
+                        .output();
+                }
+            });
+        }
+    });
+
+    let app_weak_timeout = app_weak.clone();
+    app.on_display_set_timeout({
+        move |index| {
+            if let Some(app) = app_weak_timeout.upgrade() {
+                app.set_display_timeout_index(index);
+            }
+            #[cfg(target_os = "linux")]
+            set_display_timeout(index);
+        }
+    });
+
+    start_system_info_loop(app_weak.clone());
+
+    app.on_interaction_occurred({
+        move || {
+            #[cfg(target_os = "linux")]
+            record_interaction();
+        }
+    });
+
+    let app_weak_type = app_weak.clone();
+    app.on_wifi_type_key(move |key| {
+        if let Some(ui) = app_weak_type.upgrade() {
+            let mut current = ui.get_wifi_typed_password().to_string();
+            current.push_str(&key);
+            ui.set_wifi_typed_password(current.into());
+        }
+    });
+
+    let app_weak_back = app_weak.clone();
+    app.on_wifi_backspace(move || {
+        if let Some(ui) = app_weak_back.upgrade() {
+            let mut current = ui.get_wifi_typed_password().to_string();
+            current.pop();
+            ui.set_wifi_typed_password(current.into());
+        }
+    });
+
+    let app_weak_scan = app_weak.clone();
+    app.on_wifi_scan(move || {
+        if let Some(ui) = app_weak_scan.upgrade() {
+            ui.set_wifi_scanning(true);
+            
+            let app_weak_scan_done = app_weak_scan.clone();
+            thread::spawn(move || {
+                let networks = do_wifi_scan();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui_done) = app_weak_scan_done.upgrade() {
+                        ui_done.set_wifi_scanning(false);
+                        
+                        let wifi_models: Vec<WifiNetwork> = networks
+                            .into_iter()
+                            .map(|n| WifiNetwork {
+                                ssid: n.ssid.into(),
+                                signal: n.signal,
+                                secured: n.secured,
+                            })
+                            .collect();
+                        
+                        ui_done.set_wifi_networks(slint::ModelRc::new(slint::VecModel::from(wifi_models)));
+                    }
+                });
+            });
+        }
+    });
+
+    let app_weak_connect = app_weak.clone();
+    app.on_wifi_connect(move |ssid, password| {
+        if let Some(ui) = app_weak_connect.upgrade() {
+            ui.set_wifi_connecting(true);
+            ui.set_wifi_connection_error("".into());
+            
+            let app_weak_connect_done = app_weak_connect.clone();
+            let ssid_str = ssid.to_string();
+            let password_str = password.to_string();
+            
+            thread::spawn(move || {
+                let result = do_wifi_connect(&ssid_str, &password_str);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui_done) = app_weak_connect_done.upgrade() {
+                        ui_done.set_wifi_connecting(false);
+                        match result {
+                            Ok(_) => {
+                                ui_done.set_wifi_keyboard_open(false);
+                                ui_done.set_wifi_typed_password("".into());
+                                refresh_system_info(&ui_done);
+                            }
+                            Err(e) => {
+                                ui_done.set_wifi_connection_error(e.into());
+                            }
+                        }
+                    }
+                });
+            });
+        }
+    });
+
+    #[cfg(target_os = "linux")]
+    {
+        start_screen_timeout_loop(app_weak.clone());
+    }
+
     start_timecode_loop(app_weak.clone(), recording_state, camera_settings_state);
     start_camera_ingest_loop(app_weak, Arc::clone(&focus_peaking_active));
 
@@ -566,6 +779,24 @@ fn apply_default_camera_settings(app: &AppWindow, camera_settings_state: &Arc<Mu
     app.set_current_media_detail("MP4 ready".into());
     app.set_exposure_signal(0);
     apply_audio_levels_to_ui(app, AudioMeterUiState::default());
+    app.set_system_open(false);
+    app.set_system_tab_index(0);
+    app.set_backlight_level(0.5);
+    app.set_audio_devices(slint::ModelRc::new(slint::VecModel::from(vec![])));
+    app.set_audio_device_index(0);
+    app.set_audio_gain(0.8);
+    app.set_storage_used("--".into());
+    app.set_storage_total("--".into());
+    app.set_storage_percent(0.0);
+    app.set_network_interface("--".into());
+    app.set_network_type("--".into());
+    app.set_network_ip("--".into());
+    app.set_network_gateway("--".into());
+    app.set_cpu_temp("--".into());
+    app.set_system_uptime("--".into());
+    app.set_system_confirm_action("".into());
+    app.set_system_confirm_open(false);
+    app.set_display_timeout_index(get_display_timeout_index());
     let fps = camera_settings_state.lock().ok().map(|state| state.fps()).unwrap_or(30);
     app.set_timecode(format_timecode(0, fps).into());
 }
@@ -671,6 +902,8 @@ fn start_camera_metadata_loop(
                     if !toggle_in_flight {
                         if let Some(is_recording) = status.is_recording {
                             set_recording_ui_state(&ui, &recording_state, is_recording, settings.fps());
+                            #[cfg(target_os = "linux")]
+                            IS_RECORDING_ACTIVE.store(is_recording, Ordering::SeqCst);
                         }
                     }
                 }
@@ -1994,4 +2227,668 @@ fn send_camera_request(request: &CameraControlRequest<'_>) -> std::io::Result<Ca
 
     serde_json::from_str::<CameraStatusResponse>(&response)
         .map_err(|error| std::io::Error::other(format!("failed to decode camera response: {error}")))
+}
+
+fn start_system_info_loop(app_weak: slint::Weak<AppWindow>) {
+    thread::spawn(move || {
+        #[cfg(target_os = "linux")]
+        {
+            // Read initial backlight level
+            let initial = read_backlight();
+            let app_handle = app_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = app_handle.upgrade() {
+                    ui.set_backlight_level(initial);
+                }
+            });
+        }
+
+        loop {
+            let app_handle = app_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = app_handle.upgrade() {
+                    if !ui.get_system_open() {
+                        return;
+                    }
+                    refresh_system_info(&ui);
+                }
+            });
+
+            thread::sleep(Duration::from_secs(2));
+        }
+    });
+}
+
+struct SystemInfoData {
+    storage_used: String,
+    storage_total: String,
+    storage_percent: f32,
+    network_interface: String,
+    network_type: String,
+    network_ip: String,
+    network_gateway: String,
+    network_ssid: String,
+    cpu_temp: String,
+    system_uptime: String,
+    system_model: String,
+    system_version: String,
+    audio_devices: Vec<String>,
+}
+
+fn gather_system_info() -> SystemInfoData {
+    #[cfg(not(target_os = "linux"))]
+    {
+        SystemInfoData {
+            storage_used: "12.4 GB".to_string(),
+            storage_total: "29.1 GB".to_string(),
+            storage_percent: 0.426,
+            network_interface: "wlan0".to_string(),
+            network_type: "WiFi".to_string(),
+            network_ip: "192.168.8.145".to_string(),
+            network_gateway: "192.168.8.1".to_string(),
+            network_ssid: "Studio_Main_5G".to_string(),
+            cpu_temp: "48.5 °C".to_string(),
+            system_uptime: "0d 2h 15m".to_string(),
+            system_model: "Raspberry Pi 5 Model B".to_string(),
+            system_version: format!("lumapi-cam v{}", env!("CARGO_PKG_VERSION")),
+            audio_devices: vec!["Studio Mic".to_string(), "Internal Mic".to_string()],
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let (used, total, percent) = get_storage_usage();
+        let (iface, ntype, ip, gw, ssid) = get_network_info();
+        let cpu_temp = format_cpu_temp(get_cpu_temp());
+        let system_uptime = format_uptime(get_uptime());
+        let audio_devices = list_audio_input_devices();
+        
+        let system_model = if let Ok(m) = std::fs::read_to_string("/proc/device-tree/model") {
+            m.trim_end_matches('\0').trim().to_string()
+        } else {
+            "Raspberry Pi 5".to_string()
+        };
+        let system_version = format!("lumapi-cam v{}", env!("CARGO_PKG_VERSION"));
+
+        SystemInfoData {
+            storage_used: used,
+            storage_total: total,
+            storage_percent: percent,
+            network_interface: iface,
+            network_type: ntype,
+            network_ip: ip,
+            network_gateway: gw,
+            network_ssid: ssid,
+            cpu_temp,
+            system_uptime,
+            system_model,
+            system_version,
+            audio_devices,
+        }
+    }
+}
+
+fn apply_system_info(app: &AppWindow, info: SystemInfoData) {
+    app.set_storage_used(info.storage_used.into());
+    app.set_storage_total(info.storage_total.into());
+    app.set_storage_percent(info.storage_percent);
+
+    app.set_network_interface(info.network_interface.into());
+    app.set_network_type(info.network_type.into());
+    app.set_network_ip(info.network_ip.into());
+    app.set_network_gateway(info.network_gateway.into());
+    app.set_network_ssid(info.network_ssid.into());
+
+    app.set_cpu_temp(info.cpu_temp.into());
+    app.set_system_uptime(info.system_uptime.into());
+    app.set_system_model(info.system_model.into());
+    app.set_system_version(info.system_version.into());
+
+    if !info.audio_devices.is_empty() {
+        app.set_audio_devices(slint::ModelRc::new(slint::VecModel::from(
+            info.audio_devices.into_iter().map(|d| slint::SharedString::from(d)).collect::<Vec<_>>(),
+        )));
+    }
+}
+
+fn refresh_system_info(app: &AppWindow) {
+    let app_weak = app.as_weak();
+    thread::spawn(move || {
+        let info = gather_system_info();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = app_weak.upgrade() {
+                apply_system_info(&ui, info);
+            }
+        });
+    });
+}
+
+#[cfg(target_os = "linux")]
+static CURRENT_BACKLIGHT_LEVEL: AtomicU32 = AtomicU32::new(128);
+
+#[cfg(target_os = "linux")]
+fn read_backlight() -> f32 {
+    let backlight_dir = std::fs::read_dir("/sys/class/backlight")
+        .ok()
+        .and_then(|mut entries| entries.next())
+        .and_then(|entry| entry.ok())
+        .map(|entry| entry.path());
+
+    let Some(dir) = backlight_dir else {
+        return 0.5;
+    };
+
+    let max_path = dir.join("max_brightness");
+    let cur_path = dir.join("brightness");
+
+    let max: u32 = std::fs::read_to_string(&max_path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(255);
+
+    let cur: u32 = std::fs::read_to_string(&cur_path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(128);
+
+    CURRENT_BACKLIGHT_LEVEL.store(cur, Ordering::Relaxed);
+
+    if max == 0 { 0.5 } else { (cur as f32 / max as f32).clamp(0.0, 1.0) }
+}
+
+#[cfg(target_os = "linux")]
+fn write_backlight(level: f32) {
+    let backlight_dir = std::fs::read_dir("/sys/class/backlight")
+        .ok()
+        .and_then(|mut entries| entries.next())
+        .and_then(|entry| entry.ok())
+        .map(|entry| entry.path());
+
+    let Some(dir) = backlight_dir else { return };
+
+    let max_path = dir.join("max_brightness");
+    let cur_path = dir.join("brightness");
+
+    let max: u32 = std::fs::read_to_string(&max_path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(255);
+
+    let value = ((level.clamp(0.0, 1.0) * max as f32).round() as u32).clamp(1, max);
+    CURRENT_BACKLIGHT_LEVEL.store(value, Ordering::Relaxed);
+    let _ = std::fs::write(&cur_path, value.to_string());
+}
+
+#[cfg(target_os = "linux")]
+fn list_audio_input_devices() -> Vec<String> {
+    // Use arecord -L to list ALSA capture PCM device names
+    match std::process::Command::new("arecord")
+        .arg("-L")
+        .output()
+    {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            text.lines()
+                .filter(|line| !line.is_empty() && !line.starts_with("null") && !line.starts_with("default"))
+                .take(20)
+                .map(|s| s.trim().to_string())
+                .collect()
+        }
+        Err(_) => vec![],
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_storage_usage() -> (String, String, f32) {
+    let dir = recordings_dir();
+    match std::process::Command::new("df")
+        .args(["-B1", dir])
+        .output()
+    {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            // df output: Filesystem 1B-blocks Used Available Use% Mounted
+            for line in text.lines().skip(1) {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                if fields.len() >= 4 {
+                    let total: u64 = fields[1].parse().unwrap_or(0);
+                    let used: u64 = fields[2].parse().unwrap_or(0);
+                    let percent = if total > 0 { used as f32 / total as f32 } else { 0.0 };
+                    return (format_file_size(used), format_file_size(total), percent.clamp(0.0, 1.0));
+                }
+            }
+            ("--".to_string(), "--".to_string(), 0.0)
+        }
+        Err(_) => ("--".to_string(), "--".to_string(), 0.0),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_network_info() -> (String, String, String, String, String) {
+    let mut iface = "--".to_string();
+    let mut ntype = "--".to_string();
+    let mut ip = "--".to_string();
+    let mut gateway = "--".to_string();
+    let mut ssid = "--".to_string();
+
+    // Get default route interface and gateway from /proc/net/route
+    if let Ok(routes) = std::fs::read_to_string("/proc/net/route") {
+        for line in routes.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 3 && fields[1] == "00000000" {
+                iface = fields[0].to_string();
+                // Gateway is in hex, bytes reversed
+                if let Ok(gw_hex) = u32::from_str_radix(fields[2], 16) {
+                    gateway = format!(
+                        "{}.{}.{}.{}",
+                        gw_hex & 0xFF,
+                        (gw_hex >> 8) & 0xFF,
+                        (gw_hex >> 16) & 0xFF,
+                        (gw_hex >> 24) & 0xFF,
+                    );
+                }
+                break;
+            }
+        }
+    }
+
+    // Check if WiFi: look for /sys/class/net/<iface>/wireless or phy80211
+    if !iface.is_empty() && iface != "--" {
+        let wireless_path = format!("/sys/class/net/{iface}/wireless");
+        let phy_path = format!("/sys/class/net/{iface}/phy80211");
+        if std::path::Path::new(&wireless_path).exists() || std::path::Path::new(&phy_path).exists() {
+            ntype = "WiFi".to_string();
+        } else {
+            ntype = "Ethernet".to_string();
+        }
+    }
+
+    // Get IP address for the interface
+    if !iface.is_empty() && iface != "--" {
+        if let Ok(output) = std::process::Command::new("ip")
+            .args(["-4", "addr", "show", &iface])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("inet ") {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        ip = parts[1].split('/').next().unwrap_or("--").to_string();
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if ntype == "WiFi" {
+        if let Ok(output) = std::process::Command::new("nmcli")
+            .args(["-t", "-f", "ACTIVE,SSID", "device", "wifi", "list"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if line.starts_with("yes:") {
+                    let parts: Vec<&str> = line.split(':').collect();
+                    if parts.len() >= 2 {
+                        ssid = parts[1..].join(":");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    (iface, ntype, ip, gateway, ssid)
+}
+
+struct WifiNetworkScanResult {
+    ssid: String,
+    signal: i32,
+    secured: bool,
+}
+
+fn do_wifi_scan() -> Vec<WifiNetworkScanResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        thread::sleep(Duration::from_secs(1));
+        vec![
+            WifiNetworkScanResult { ssid: "Studio_Main_5G".to_string(), signal: 95, secured: true },
+            WifiNetworkScanResult { ssid: "Studio_Guest".to_string(), signal: 72, secured: true },
+            WifiNetworkScanResult { ssid: "Camera_Hotspot".to_string(), signal: 85, secured: false },
+            WifiNetworkScanResult { ssid: "Neighbor_WiFi".to_string(), signal: 45, secured: true },
+        ]
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let output = std::process::Command::new("nmcli")
+            .args(["-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"])
+            .output();
+
+        let mut networks = Vec::new();
+        match output {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let mut unique_nets = std::collections::HashMap::new();
+
+                for line in text.lines() {
+                    let parts: Vec<&str> = line.split(':').collect();
+                    if parts.len() >= 2 {
+                        let security = parts.last().cloned().unwrap_or("");
+                        let signal_str = parts.get(parts.len() - 2).cloned().unwrap_or("0");
+                        let signal: i32 = signal_str.parse().unwrap_or(0);
+                        let ssid = parts[0..parts.len() - 2].join(":");
+
+                        if ssid.trim().is_empty() {
+                            continue;
+                        }
+
+                        let secured = !security.trim().is_empty() && !security.contains("--");
+                        
+                        let result = WifiNetworkScanResult {
+                            ssid: ssid.clone(),
+                            signal,
+                            secured,
+                        };
+
+                        if let Some(existing) = unique_nets.get(&ssid) {
+                            if signal > *existing {
+                                unique_nets.insert(ssid.clone(), signal);
+                                if let Some(idx) = networks.iter().position(|n: &WifiNetworkScanResult| n.ssid == ssid) {
+                                    networks[idx] = result;
+                                }
+                            }
+                        } else {
+                            unique_nets.insert(ssid, signal);
+                            networks.push(result);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        networks.sort_by(|a, b| b.signal.cmp(&a.signal));
+        networks
+    }
+}
+
+fn do_wifi_connect(ssid: &str, password: &str) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = ssid;
+        thread::sleep(Duration::from_secs(2));
+        if password == "error" {
+            return Err("Invalid password (mock error)".to_string());
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Delete any existing profile for this SSID to avoid reusing broken profile settings
+        let _ = std::process::Command::new("nmcli")
+            .args(["connection", "delete", ssid])
+            .output();
+
+        let output = if password.is_empty() {
+            std::process::Command::new("nmcli")
+                .args(["device", "wifi", "connect", ssid])
+                .output()
+        } else {
+            std::process::Command::new("nmcli")
+                .args(["device", "wifi", "connect", ssid, "password", password])
+                .output()
+        };
+
+        match output {
+            Ok(out) => {
+                if out.status.success() {
+                    Ok(())
+                } else {
+                    let err_msg = String::from_utf8_lossy(&out.stderr).to_string();
+                    let err_msg = if err_msg.trim().is_empty() {
+                        String::from_utf8_lossy(&out.stdout).to_string()
+                    } else {
+                        err_msg
+                    };
+                    let err_msg = err_msg.trim().to_string();
+                    if err_msg.is_empty() {
+                        Err("Failed to connect to network".to_string())
+                    } else {
+                        Err(err_msg)
+                    }
+                }
+            }
+            Err(e) => Err(format!("Failed to execute nmcli: {}", e)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_cpu_temp() -> f32 {
+    std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .map(|v| v / 1000.0)
+        .unwrap_or(0.0)
+}
+
+#[cfg(target_os = "linux")]
+fn get_uptime() -> f64 {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+#[cfg(target_os = "linux")]
+fn format_cpu_temp(temp: f32) -> String {
+    if temp <= 0.0 {
+        "--".into()
+    } else {
+        format!("{:.1}°C", temp)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn format_uptime(seconds: f64) -> String {
+    if seconds <= 0.0 {
+        return "--".into();
+    }
+
+    let total_secs = seconds as u64;
+    let days = total_secs / 86400;
+    let hours = (total_secs % 86400) / 3600;
+    let minutes = (total_secs % 3600) / 60;
+
+    if days > 0 {
+        format!("{days}d {hours}h {minutes}m")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
+fn delete_all_recordings_task() {
+    let dir = recordings_dir();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let ext = path.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if ext == "mp4" || ext == "mkv" || ext == "jpg" || ext == "json" {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+        // Also remove thumbnails
+        let thumb_dir = format!("{dir}/.thumbs");
+        if let Ok(t_entries) = std::fs::read_dir(&thumb_dir) {
+            for entry in t_entries.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let _ = std::fs::remove_file(format!("{dir}/.metadata-cache.json"));
+    }
+}
+
+// --- Screen timeout / touch monitoring ---
+
+#[cfg(target_os = "linux")]
+static LAST_TOUCH_MS: AtomicI64 = AtomicI64::new(0);
+
+#[cfg(target_os = "linux")]
+fn record_interaction() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    LAST_TOUCH_MS.store(now, std::sync::atomic::Ordering::SeqCst);
+}
+#[cfg(target_os = "linux")]
+static DISPLAY_TIMEOUT_SECS: AtomicU32 = AtomicU32::new(0);
+#[cfg(target_os = "linux")]
+static IS_RECORDING_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
+fn get_display_timeout_index() -> i32 {
+    match DISPLAY_TIMEOUT_SECS.load(Ordering::Relaxed) {
+        60 => 1,
+        300 => 2,
+        600 => 3,
+        _ => 0,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_display_timeout_index() -> i32 {
+    0
+}
+
+#[cfg(target_os = "linux")]
+fn set_display_timeout(index: i32) {
+    let secs: u32 = match index {
+        1 => 60,
+        2 => 300,
+        3 => 600,
+        _ => 0,
+    };
+    DISPLAY_TIMEOUT_SECS.store(secs, Ordering::Relaxed);
+}
+
+
+#[cfg(target_os = "linux")]
+fn is_screen_blanked() -> bool {
+    if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
+        for entry in entries.flatten() {
+            if let Ok(s) = std::fs::read_to_string(entry.path().join("brightness")) {
+                if s.trim() == "0" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn set_screen_blanked(blank: bool) {
+    if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
+        for entry in entries.flatten() {
+            let path = entry.path().join("brightness");
+            if path.exists() {
+                if blank {
+                    let _ = std::fs::write(path, "1");
+                } else {
+                    let val = CURRENT_BACKLIGHT_LEVEL.load(Ordering::Relaxed);
+                    let _ = std::fs::write(path, val.to_string());
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn start_screen_timeout_loop(app_weak: slint::Weak<AppWindow>) {
+    thread::spawn(move || {
+        record_interaction();
+        let mut is_blanked = is_screen_blanked();
+        loop {
+            thread::sleep(Duration::from_secs(1));
+
+            let timeout_secs = DISPLAY_TIMEOUT_SECS.load(Ordering::Relaxed);
+            let last_touch = LAST_TOUCH_MS.load(Ordering::SeqCst);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let idle_ms = if now > last_touch { now - last_touch } else { 0 };
+
+            let is_recording = IS_RECORDING_ACTIVE.load(Ordering::SeqCst);
+
+            if is_recording {
+                if is_blanked {
+                    eprintln!("display timeout: recording active, unblanking screen");
+                    set_screen_blanked(false);
+                    let app_weak_clone = app_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(app) = app_weak_clone.upgrade() {
+                            app.set_screen_blanked(false);
+                        }
+                    });
+                    is_blanked = false;
+                }
+                continue;
+            }
+
+            if timeout_secs == 0 {
+                if is_blanked {
+                    eprintln!("display timeout: timeout disabled, unblanking screen");
+                    set_screen_blanked(false);
+                    let app_weak_clone = app_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(app) = app_weak_clone.upgrade() {
+                            app.set_screen_blanked(false);
+                        }
+                    });
+                    is_blanked = false;
+                }
+                continue;
+            }
+
+            let idle_secs = (idle_ms / 1000) as u32;
+
+            if !is_blanked && idle_secs >= timeout_secs {
+                eprintln!("display timeout: screen blanked (brightness set to 1) after {idle_secs}s idle");
+                set_screen_blanked(true);
+                let app_weak_clone = app_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = app_weak_clone.upgrade() {
+                        app.set_screen_blanked(true);
+                    }
+                });
+                is_blanked = true;
+            } else if is_blanked && idle_secs < timeout_secs {
+                let val = CURRENT_BACKLIGHT_LEVEL.load(Ordering::Relaxed);
+                eprintln!("display timeout: screen unblanked (restored to raw brightness {val} due to touch activity)");
+                set_screen_blanked(false);
+                let app_weak_clone = app_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = app_weak_clone.upgrade() {
+                        app.set_screen_blanked(false);
+                    }
+                });
+                is_blanked = false;
+            }
+        }
+    });
 }

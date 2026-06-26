@@ -3,6 +3,14 @@
 PLAYBACK_REQUEST_PATH="/tmp/lumapi-playback-request"
 PLAYBACK_LOG_PATH="/tmp/lumapi-media-playback.log"
 
+# Ensure mpv can see the custom UI font for playback controls
+MPV_FONT_DIR="$HOME/.config/mpv/fonts"
+if [ ! -f "$MPV_FONT_DIR/ENGCAPS.ttf" ]; then
+  echo "Bootstrapping mpv fonts..." | sudo tee -a "$PLAYBACK_LOG_PATH" >/dev/null
+  mkdir -p "$MPV_FONT_DIR"
+  cp /home/pi/lumapi-cam/ui/assets/font/ENGCAPS.ttf "$MPV_FONT_DIR/" 2>/dev/null || true
+fi
+
 # Hide cursor and clear console at startup
 sudo sh -c 'tput civis > /dev/tty1 2>/dev/null || true'
 sudo sh -c 'clear > /dev/tty1 2>/dev/null || true'
@@ -10,6 +18,7 @@ sudo dd if=/dev/zero of=/dev/fb0 2>/dev/null || true
 
 cleanup_runtime() {
   sudo pkill -f "/home/pi/lumapi-cam/camera_service.py" 2>/dev/null || true
+  sudo pkill -f touch_bridge.py 2>/dev/null || true
   sudo killall -9 rpicam-vid lumapi-cam lumapi-hud-test 2>/dev/null || true
   sleep 0.3
 }
@@ -49,7 +58,15 @@ play_requested_clip() {
 
   if command -v mpv >/dev/null 2>&1; then
     echo "playback: handoff launch mpv -> $clip_path (rotate: $playback_rotation)" | sudo tee -a "$PLAYBACK_LOG_PATH" >/dev/null
-    XDG_RUNTIME_DIR="$runtime_dir" mpv --fs --vo=drm --ao=alsa --hwdec=no --osc=no --cursor-autohide=no --input-touch-emulate-mouse=yes --input-vo-keyboard=yes --input-default-bindings=yes --input-conf=/home/pi/lumapi-cam/mpv-touch-input.conf --script=/home/pi/lumapi-cam/touch-helper.lua --video-rotate="${playback_rotation}" "$clip_path" 2>&1 | sudo tee -a "$PLAYBACK_LOG_PATH" >/dev/null
+    
+    # Start touch input bridge in background (reads raw touch coordinates and sends to mpv via IPC)
+    sudo rm -f /tmp/mpv-socket
+    sudo python3 /home/pi/lumapi-cam/touch_bridge.py /tmp/mpv-socket 2>&1 | sudo tee -a "$PLAYBACK_LOG_PATH" >/dev/null &
+    BRIDGE_PID=$!
+    
+    XDG_RUNTIME_DIR="$runtime_dir" mpv --fs --vo=drm --ao=alsa --hwdec=no --osc=no --cursor-autohide=no --input-touch-emulate-mouse=yes --input-vo-keyboard=yes --input-default-bindings=yes --input-conf=/home/pi/lumapi-cam/mpv-touch-input.conf --script=/home/pi/lumapi-cam/touch-helper.lua --video-rotate="${playback_rotation}" --input-ipc-server=/tmp/mpv-socket "$clip_path" 2>&1 | sudo tee -a "$PLAYBACK_LOG_PATH" >/dev/null
+    
+    sudo kill -9 $BRIDGE_PID 2>/dev/null || true
   elif command -v vlc >/dev/null 2>&1; then
     echo "playback: handoff launch vlc -> $clip_path (rotate: $playback_rotation)" | sudo tee -a "$PLAYBACK_LOG_PATH" >/dev/null
     XDG_RUNTIME_DIR="$runtime_dir" vlc --fullscreen --play-and-exit --vout=drm_vout --video-filter=transform --transform-type="${playback_rotation}" "$clip_path" 2>&1 | sudo tee -a "$PLAYBACK_LOG_PATH" >/dev/null

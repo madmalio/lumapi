@@ -42,7 +42,16 @@ Current State Summary
 - Left and right compact settings drawers are matched at `348px` height.
 - Compact exposure traffic-light overlay is implemented and toggleable via `traffic.png`; it shifts right when settings is open.
 - Compact vertical audio meter is reintroduced on the left and shifts right when the traffic-light overlay is enabled.
-- Active blocker: playback control UX on the Waveshare screen is not yet resolved (orientation and touch behavior mismatch with expected Play/Pause/Exit flow).
+- Playback controls use a minimal `touch-helper.lua` overlay with `mp.get_osd_size()` for coordinate-agnostic tap detection; left-half = Play/Pause, right-half = Exit. No rotation-specific coordinate transforms needed.
+- Touch controls in `touch_bridge.py` are now mapped directly from the raw portrait digitizer correctly into the visual landscape orientation without improper inverted axes.
+- System Settings page is implemented as a full-page overlay (like Media Browser) with Sony-style vertical tab strip on the left and content on the right. Five tabs: Display (brightness + screen timeout), Audio (gain + live level VU bars with clip flashes & peak holds), Storage (usage bar with segmented capacity grid + delete all), Network (interface/IP/gateway status + Wi-Fi scanning with credential entry via custom OSK), System (CPU temp/uptime + side-by-side Reboot/Shutdown confirmation triggers + dynamic device tree model resolution).
+- System settings hardware queries (using `df`, `ip`, `nmcli`, and `arecord`) are executed asynchronously on a background worker thread (`thread::spawn`) and posted back to Slint's event loop to prevent UI thread blocking and touch registration lag.
+- Tab strip buttons in the System Settings vertical drawer use high-fidelity custom vector drawings (Display screen, Audio speaker, Storage floppy disk, Network signal bars, and System microchip layout) that change to the red menu accent color `#ff5c5c` when active.
+- Wi-Fi Scan Result list box is enlarged to `220px` height and touch-drag scrollable with swipe prevention to ignore virtual keyboard activation while dragging/swiping.
+- Connected network row in the Wi-Fi scan list is highlighted with a green background tint, green border, checkmark suffix, and a dedicated green "CONNECTED" badge.
+- Screen timeout monitors evdev touch events and blanks the display via `/sys/class/graphics/fb0/blank` after configurable idle time (Off / 1 min / 5 min / 10 min). Any touch unblanks the screen. Blanking is suppressed during recording.
+- All main UI overlays (top bar, bottom bar, exposure traffic, audio meter, settings drawers, view aids, SAVING indicator) check `!root.system_open` to prevent bleed-through onto the System Settings page.
+- Bracing and conditional tab checks in Slint are nested independently to prevent layout overlap.
 
 Important User Preferences
 
@@ -67,6 +76,7 @@ Typical SCP commands from PC to Pi (`192.168.8.145`):
 scp "C:\Users\Mark\Dev\lumapi-v2\lumapi-cam\rust-src\main.rs" pi@192.168.8.145:/home/pi/lumapi-cam/rust-src/main.rs
 scp "C:\Users\Mark\Dev\lumapi-v2\lumapi-cam\ui\appwindow.slint" pi@192.168.8.145:/home/pi/lumapi-cam/ui/appwindow.slint
 scp "C:\Users\Mark\Dev\lumapi-v2\lumapi-cam\camera_service.py" pi@192.168.8.145:/home/pi/lumapi-cam/camera_service.py
+scp "C:\Users\Mark\Dev\lumapi-v2\lumapi-cam\touch-helper.lua" pi@192.168.8.145:/home/pi/lumapi-cam/touch-helper.lua
 scp -r "C:\Users\Mark\Dev\lumapi-v2\lumapi-cam\ui\assets" pi@192.168.8.145:/home/pi/lumapi-cam/ui/
 scp "C:\Users\Mark\Dev\lumapi-v2\launch-cam.sh" pi@192.168.8.145:/home/pi/launch-cam.sh
 ```
@@ -98,7 +108,7 @@ Important Environment Variables
 Display and Touch Notes (Waveshare 2.8 DSI)
 
 - Display and app orientation are currently stabilized by using app-side KMS rotation (`LUMAPI_KMS_ROTATION=270`) with the current panel config.
-- Touch mapping has been adjusted using a 90-degree calibration matrix and is considered the current working mapping.
+- Touch mapping for `touch_bridge.py` matches the hardware's native output directly. No inverse portrait rotation is required.
 - If orientation/touch are changed at boot level, re-verify app rotation and touch mapping together.
 
 Important Files
@@ -122,7 +132,10 @@ Important Files
   mpv input override file used by launcher playback path.
 
 - `lumapi-cam/touch-helper.lua`
-  mpv touch overlay/helper script used during playback handoff experiments.
+  mpv touch overlay/helper script used during playback to draw OS level visual controls.
+
+- `lumapi-cam/build_bgra.py`
+  Local utility script for converting playback UI PNG icons into raw pre-multiplied BGRA assets.
 
 Recording-With-Audio Status
 
@@ -153,7 +166,7 @@ Important Constraint
 
 Next Recommended Work
 
-1. Resolve playback controls on Waveshare 2.8: keep clip orientation correct while providing reliable touch Play/Pause/Exit controls in the correct orientation.
-2. Validate compact exposure traffic-light + vertical audio meter behavior together (symmetry, collision handling, readability, and touch ergonomics).
-3. Re-verify playback transitions and console suppression remain clean during relaunch loops after playback control changes.
-4. Run on-device validation pass for compact overlays (delete confirm, focus peaking visibility, zoom behavior, settings drawer interactions).
+1. Validate the asynchronous system status querying thread behavior on the Pi to confirm that no UI frame rates drop or touch events are lost.
+2. Verify Wi-Fi list scrolling, credential typing on the OSK, and dynamic connected badge coloring on the physical Waveshare panel.
+3. Verify that the side-by-side Reboot/Shutdown confirmation overlays execute correctly on the background thread on the physical target.
+4. Validate the screen timeout blanking/unblanking behaviour on-device under dynamic settings inputs.

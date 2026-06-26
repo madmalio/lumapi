@@ -1,95 +1,90 @@
--- Bulletproof ASCII playback controls for mpv on headless Pi
--- Left visual half: Play/Pause  |  Right visual half: Exit
--- Auto-hide is DISABLED for debugging
-
 local mp = require 'mp'
 local msg = require 'mp.msg'
 
 local overlay = mp.create_osd_overlay("ass-events")
 
-local function get_rotation()
-    return mp.get_property_number("video-rotate", 0)
+local function format_time(seconds)
+    if not seconds or seconds < 0 then return "00:00" end
+    local m = math.floor(seconds / 60)
+    local s = math.floor(seconds % 60)
+    return string.format("%02d:%02d", m, s)
 end
 
-local function logical_to_physical(lx, ly, rot)
-    if rot == 90 then return 1 - ly, lx
-    elseif rot == 180 then return 1 - lx, 1 - ly
-    elseif rot == 270 then return ly, 1 - lx
-    else return lx, ly end
-end
+local last_draw_pos = -1
+local last_draw_paused = nil
 
-local function physical_to_logical(px, py, osd_w, osd_h, rot)
-    local x = px / osd_w
-    local y = py / osd_h
-
-    if rot == 90 then return y, 1 - x
-    elseif rot == 180 then return 1 - x, 1 - y
-    elseif rot == 270 then return 1 - y, x
-    else return x, y end
-end
-
-local function draw_overlay()
-    local osd_w, osd_h = mp.get_osd_size()
-    if osd_w <= 0 or osd_h <= 0 then return end
-
-    overlay.res_x = osd_w
-    overlay.res_y = osd_h
-
-    local paused = mp.get_property_bool("pause", false)
-    local rot = get_rotation()
-    local ass_rot = -rot
-
-    -- Map logical zones to physical pixels
-    local p_left_x, p_left_y = logical_to_physical(0.25, 0.5, rot)
-    local p_right_x, p_right_y = logical_to_physical(0.75, 0.5, rot)
-
-    p_left_x = p_left_x * osd_w
-    p_left_y = p_left_y * osd_h
-    p_right_x = p_right_x * osd_w
-    p_right_y = p_right_y * osd_h
-
-    -- Using standard ASCII text to bypass missing font packages on Pi OS Lite
-    local play_text = paused and "[ PLAY ]" or "[ PAUSE ]"
-
-    local ass = ""
-
-    -- Left visual side
-    ass = ass .. string.format(
-        "{\\an5\\pos(%d,%d)\\frz%d\\fs36\\b1\\bord3\\shad1\\c&HFFFFFF&}%s\n",
-        p_left_x, p_left_y, ass_rot, play_text
-    )
+local function add_icon(id, vx, vy, filename, w, h)
+    local pw, ph = mp.get_osd_size()
+    if pw <= 0 or ph <= 0 then return end
     
-    -- Right visual side
-    ass = ass .. string.format(
-        "{\\an5\\pos(%d,%d)\\frz%d\\fs36\\b1\\bord3\\shad1\\c&H5555FF&}[ EXIT ]\n",
-        p_right_x, p_right_y, ass_rot
-    )
+    -- Calculate the visual Top-Right corner because the image was rotated 90 CCW.
+    -- The original Top-Left of the image is now at the Top-Right of the visual space.
+    local vtr_x = vx + w/2
+    local vtr_y = vy - h/2
+    
+    local rx = vtr_x / 640.0
+    local ry = vtr_y / 480.0
+    
+    local nx = math.floor(ry * pw)
+    local ny = math.floor(ph - rx * ph)
+    
+    local file_path = "/home/pi/lumapi-cam/ui/assets/img_bgra/" .. filename
+    
+    mp.command_native({
+        "overlay-add",
+        id,
+        nx, ny,
+        file_path,
+        0, "bgra",
+        w, h, w*4
+    })
+end
+
+local function draw_overlay(force)
+    local pw, ph = mp.get_osd_size()
+    if pw <= 0 or ph <= 0 then return end
+
+    overlay.res_x = pw
+    overlay.res_y = ph
+
+    local time_pos = mp.get_property_number("time-pos") or 0
+    local duration = mp.get_property_number("duration") or 0
+    local paused = mp.get_property_bool("pause", false)
+
+    if not force and last_draw_paused == paused and math.abs(time_pos - last_draw_pos) < 0.25 then
+        return
+    end
+
+    last_draw_pos = time_pos
+    last_draw_paused = paused
+
+    -- Icons (resized to 64x64)
+    add_icon(1, 600, 40, "exit.bgra", 64, 64)
+    add_icon(2, 220, 430, "rewind.bgra", 64, 64)
+    add_icon(3, 420, 430, "forward.bgra", 64, 64)
+    if paused then
+        add_icon(4, 320, 430, "play.bgra", 64, 64)
+    else
+        add_icon(4, 320, 430, "pause.bgra", 64, 64)
+    end
+
+    local text_rot = 90
+    local function ass_text(vx, vy, content)
+        local rx = vx / 640.0
+        local ry = vy / 480.0
+        local nx = ry * pw
+        local ny = ph - (rx * ph)
+        return string.format("{\\an5\\pos(%d,%d)\\frz%d}%s\n", nx, ny, text_rot, content)
+    end
+
+    local time_str = format_time(time_pos) .. " / " .. format_time(duration)
+    local ass = ass_text(320, 350, "{\\c&HFFFFFF&\\1a&H00&\\fs28\\b1}" .. time_str)
 
     overlay.data = ass
     overlay:update()
 end
 
-local function handle_tap(source)
-    local nx, ny = mp.get_mouse_pos()
-    local osd_w, osd_h = mp.get_osd_size()
-
-    if not nx or not ny or osd_w <= 0 then return end
-
-    local rot = get_rotation()
-    local lx, ly = physical_to_logical(nx, ny, osd_w, osd_h, rot)
-
-    if lx < 0.5 then
-        mp.command("cycle pause")
-    else
-        mp.command("quit")
-    end
-    
-    draw_overlay()
-end
-
--- Bind touch/mouse events
-mp.add_forced_key_binding("MBTN_LEFT", "touch-tap", function() handle_tap("MBTN_LEFT") end, { repeatable = false })
-mp.add_forced_key_binding("MOUSE_BTN0", "mouse-tap", function() handle_tap("MOUSE_BTN0") end, { repeatable = false })
-
-mp.observe_property("pause", "bool", function() draw_overlay() end)
-mp.register_event("file-loaded", function() draw_overlay() end)
+mp.register_event("file-loaded", function() draw_overlay(true) end)
+mp.observe_property("pause", "bool", function() draw_overlay(true) end)
+mp.observe_property("time-pos", "number", function() draw_overlay(false) end)
+mp.observe_property("duration", "number", function() draw_overlay(true) end)
