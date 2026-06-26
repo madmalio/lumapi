@@ -346,28 +346,26 @@ export component AppWindow inherits Window {
                                     width: 22px;
                                     height: 22px;
                                     // Camera body
-                                    Rectangle {
-                                        x: 2px;
-                                        y: 5px;
-                                        width: 11px;
-                                        height: 12px;
-                                        border-radius: 1px;
-                                        border-width: 1.8px;
-                                        border-color: root.system_tab_index == idx ? #ff5c5c : #888888;
-                                        background: root.system_tab_index == idx ? rgba(255, 92, 92, 0.15) : transparent;
-                                    }
-                                    // Camera lens (triangle)
                                     Path {
-                                        x: 13px;
-                                        y: 5px;
-                                        width: 7px;
-                                        height: 12px;
-                                        viewbox-width: 7;
-                                        viewbox-height: 12;
+                                        width: 22px;
+                                        height: 22px;
+                                        viewbox-width: 22;
+                                        viewbox-height: 22;
                                         stroke: root.system_tab_index == idx ? #ff5c5c : #888888;
                                         stroke-width: 1.8px;
                                         fill: root.system_tab_index == idx ? rgba(255, 92, 92, 0.15) : transparent;
-                                        commands: "M 0 4 L 7 0 V 12 L 0 8 Z";
+                                        commands: "M 2 5 H 13 V 17 H 2 Z";
+                                    }
+                                    // Camera lens (triangle)
+                                    Path {
+                                        width: 22px;
+                                        height: 22px;
+                                        viewbox-width: 22;
+                                        viewbox-height: 22;
+                                        stroke: root.system_tab_index == idx ? #ff5c5c : #888888;
+                                        stroke-width: 1.8px;
+                                        fill: root.system_tab_index == idx ? rgba(255, 92, 92, 0.15) : transparent;
+                                        commands: "M 13 9 L 20 5 V 17 L 13 13 Z";
                                     }
                                 }
 
